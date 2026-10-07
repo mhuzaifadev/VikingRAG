@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/mhuzaifadev/VikingRAG">
-    <img src="https://img.shields.io/badge/VikingRAG-0.1.0-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.1.0" />
+    <img src="https://img.shields.io/badge/VikingRAG-0.2.0-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.2.0" />
   </a>
 </p>
 
@@ -13,7 +13,7 @@
 <p align="center">
   Production hierarchical RAG inspired by the
   <a href="https://arxiv.org/abs/2609.11390"><strong>VikingRAG paper</strong></a>.<br/>
-  Accurate. Token-efficient. Built to ship.
+  Hierarchy-preserving ingestion. Multi-granular semantic Search. Built to extend.
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/release-v0.1.0-blue?logo=github" alt="Release v0.1.0" /></a>
+  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.2.0"><img src="https://img.shields.io/badge/release-v0.2.0-blue?logo=github" alt="Release v0.2.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?logo=apache" alt="Apache 2.0" /></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+" /></a>
   <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white" alt="FastAPI" /></a>
@@ -73,12 +73,14 @@ Classic RAG often flattens documents into unrelated chunks. **Structure is lost*
 
 This project turns those ideas into a production-ready stack:
 
-| Research idea | VikingRAG |
+| Research idea | This repo today |
 |---|---|
 | Hierarchical documents | `document → section → subsection → chunk` with stable URIs |
-| Cheap path first | Narrow retrieve → evaluate → escalate only when needed |
-| Evidence-first answers | Claim → evidence → verification → citation |
-| Experience edges | Reuse successful retrieval traces |
+| Multi-granular indexing | Bottom-up abstracts + embeddings at document/section/chunk |
+| Semantic Search | pgvector cosine discovery returning `viking://` URIs |
+| Cheap path / agents | Planned - escalate only when evidence is insufficient |
+| Evidence-first answers | Planned - claim → evidence → verification → citation |
+| Experience edges | Planned - reuse successful retrieval traces |
 | Production constraints | Typed config, migrations, health probes, adapters, tests |
 
 > **Independent implementation** inspired by the paper - not a fork of the AGPL research artifacts.
@@ -92,10 +94,15 @@ This project turns those ideas into a production-ready stack:
 - **Structure-aware ingestion** - Markdown, TXT, and PDF with region-local chunking
 - **Idempotent uploads** - `skip_identical`, `replace`, or `create_version`
 - **Structural navigation** - parent, children, ancestors, descendants, and URI resolve
+- **Hierarchical abstracts** - bottom-up summaries with token budgets and idempotent reuse
+- **Multi-granular embeddings** - chunk content + structural summaries with explicit embedding identity
+- **Semantic Search** - pgvector cosine retrieval with granularity weights and URI-addressable hits
+- **Replaceable providers** - OpenAI-compatible LLM/embeddings, deterministic fakes for offline tests
 - **Production foundation** - FastAPI, PostgreSQL + pgvector, Redis, object store, typed settings, health checks
-- **Clean architecture** - API / application / domain / infrastructure layers with Protocols for providers
 
-**Coming soon:** semantic `Search`, lexical `Grep`, structural `List` / `Read`, bounded agentic retrieval, hierarchical abstracts, and evaluation vs flat RAG.
+**Coming soon:** lexical `Grep`, structural `List` / `Read` tool wrappers, bounded agentic retrieval, evidence sufficiency, experience edges, and evaluation vs flat RAG.
+
+See [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md) for indexing and Search details.
 
 ---
 
@@ -225,15 +232,25 @@ curl -s http://localhost:8000/v1/health/live  | jq
 curl -s http://localhost:8000/v1/health/ready | jq
 ```
 
-Ingest a document and inspect its tree:
+Ingest a document, index it, and search:
 
 ```bash
 curl -s -X POST http://localhost:8000/v1/documents \
-  -F "file=@tests/fixtures/architecture.md;type=text/markdown" \
+  -F "file=@tests/fixtures/system_architecture.md;type=text/markdown" \
   -F "strategy=skip_identical" | jq
 
 DOC_ID="<document_id from response>"
 curl -s "http://localhost:8000/v1/documents/${DOC_ID}/tree" | jq
+
+# Requires VIKINGRAG_LLM_PROVIDER=fake and VIKINGRAG_EMBEDDING_PROVIDER=deterministic
+# (see .env.example) or real OpenAI-compatible credentials.
+curl -s -X POST "http://localhost:8000/v1/documents/${DOC_ID}/index" \
+  -H "Content-Type: application/json" \
+  -d '{"force_summaries":false,"force_embeddings":false}' | jq
+
+curl -s -X POST http://localhost:8000/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"How do we verify retrieved evidence?","top_k":5}' | jq
 ```
 
 Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
@@ -249,6 +266,9 @@ Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 | `POST` | `/v1/documents` | Multipart ingest (`.md` / `.txt` / `.pdf`) |
 | `GET` | `/v1/documents/{id}` | Document metadata |
 | `GET` | `/v1/documents/{id}/tree` | Structural tree |
+| `POST` | `/v1/documents/{id}/index` | Summarize + embed (idempotent) |
+| `GET` | `/v1/documents/{id}/index-status` | Index stage and counts |
+| `POST` | `/v1/search` | Semantic Search |
 | `GET` | `/v1/nodes/{id}` | Node metadata (+ optional content) |
 | `GET` | `/v1/uris/resolve?uri=` | Resolve a `viking://…` URI |
 
@@ -313,12 +333,6 @@ Issues and PRs are welcome. Please:
 
 ---
 
-<p align="center">
-  <sub>
-    Made with crazy curiosity &amp; late-night thoughts<br/>
-    Made with love
-  </sub>
-</p>
 
 <p align="center">
   <a href="https://www.linkedin.com/in/mhuzaifadev">LinkedIn</a>

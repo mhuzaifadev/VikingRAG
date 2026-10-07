@@ -1,4 +1,4 @@
-.PHONY: install dev lint typecheck test test-unit test-integration migrate docker-up docker-down pre-commit
+.PHONY: install dev lint typecheck test test-unit test-integration migrate docker-up docker-down pre-commit index
 
 UV ?= uv
 
@@ -35,3 +35,10 @@ docker-down:
 
 pre-commit:
 	$(UV) run pre-commit run --all-files
+
+# Index a document after structural ingest. Requires DOCUMENT_ID and a running API.
+index:
+	@test -n "$(DOCUMENT_ID)" || (echo "Usage: make index DOCUMENT_ID=<uuid>"; exit 1)
+	curl -s -X POST "http://localhost:8000/v1/documents/$(DOCUMENT_ID)/index" \
+	  -H "Content-Type: application/json" \
+	  -d '{"force_summaries":false,"force_embeddings":false}' | jq

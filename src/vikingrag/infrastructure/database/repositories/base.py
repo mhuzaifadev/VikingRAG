@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
-from vikingrag.domain.models.document import DocumentId, DocumentStatus, NodeId
+from vikingrag.domain.models.document import AbstractStatus, DocumentId, DocumentStatus, NodeId
 from vikingrag.domain.models.node import DocumentNode, TreeNode
 
 
@@ -57,6 +57,14 @@ class NodeRepository(Protocol):
     async def list_children(self, parent_id: NodeId) -> list[DocumentNode]: ...
 
     async def list_by_document(self, document_id: DocumentId) -> list[DocumentNode]: ...
+
+    async def update_abstract(
+        self,
+        node_id: NodeId,
+        *,
+        abstract_text: str,
+        abstract_status: AbstractStatus,
+    ) -> DocumentNode | None: ...
 
     async def list_ancestors(self, node_id: NodeId) -> list[DocumentNode]: ...
 

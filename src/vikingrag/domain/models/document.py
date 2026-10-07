@@ -14,7 +14,9 @@ ChunkId = NewType("ChunkId", UUID)
 class DocumentStatus(StrEnum):
     PENDING = "pending"
     PROCESSING = "processing"
-    READY = "ready"
+    READY = "ready"  # hierarchy persisted (structured)
+    SUMMARIZED = "summarized"
+    INDEXED = "indexed"
     FAILED = "failed"
     DELETED = "deleted"
 

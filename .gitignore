@@ -27,8 +27,11 @@ dmypy.json
 data/
 *.db
 
-# Internal / non-public documentation (kept local)
-docs/
+# Internal architecture notes stay local; ship public retrieval docs + ADRs
+docs/*
+!docs/RETRIEVAL.md
+!docs/ADR/
+!docs/ADR/**/*.md
 
 # Editor / agent tooling (local)
 .cursor/

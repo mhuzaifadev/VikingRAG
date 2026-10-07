@@ -154,6 +154,22 @@ class SqlNodeRepository:
         result = await self._session.execute(stmt)
         return [_to_node(row) for row in result.scalars().all()]
 
+    async def update_abstract(
+        self,
+        node_id: NodeId,
+        *,
+        abstract_text: str,
+        abstract_status: AbstractStatus,
+    ) -> DocumentNode | None:
+        row = await self._session.get(DocumentNodeRow, node_id)
+        if row is None:
+            return None
+        row.abstract_text = abstract_text
+        row.abstract_status = abstract_status.value
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_node(row)
+
     async def get_root(self, document_id: DocumentId) -> DocumentNode | None:
         stmt = (
             select(DocumentNodeRow)

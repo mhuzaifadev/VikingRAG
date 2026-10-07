@@ -76,3 +76,23 @@ class NodeNotFound(NotFoundError):
 class DocumentNotFound(NotFoundError):
     def __init__(self, message: str) -> None:
         DomainError.__init__(self, message, code="document_not_found")
+
+
+class ProviderError(InfrastructureError):
+    def __init__(self, message: str) -> None:
+        DomainError.__init__(self, message, code="provider_error")
+
+
+class EmbeddingIdentityMismatch(ValidationDomainError):
+    def __init__(self, message: str) -> None:
+        DomainError.__init__(self, message, code="embedding_identity_mismatch")
+
+
+class IndexingError(DomainError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="indexing_error")
+
+
+class DocumentNotReadyError(ValidationDomainError):
+    def __init__(self, message: str) -> None:
+        DomainError.__init__(self, message, code="document_not_ready")

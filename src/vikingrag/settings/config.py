@@ -6,7 +6,7 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -85,8 +85,12 @@ class LLMSettings(BaseSettings):
     )
 
     provider: str = "unimplemented"
-    model: str = ""
+    model: str = "gpt-4o-mini"
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str | None = None
     timeout_seconds: float = 30.0
+    max_retries: int = 2
+    temperature: float = 0.2
 
 
 class EmbeddingSettings(BaseSettings):
@@ -98,9 +102,21 @@ class EmbeddingSettings(BaseSettings):
     )
 
     provider: str = "unimplemented"
-    model: str = ""
+    model: str = "text-embedding-3-small"
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str | None = None
     dimensions: int = 1536
+    identity_version: str = "1"
     timeout_seconds: float = 30.0
+    max_retries: int = 2
+    batch_size: int = 32
+
+    @field_validator("dimensions", "batch_size")
+    @classmethod
+    def _positive_embed(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("must be >= 1")
+        return value
 
 
 class RetrievalSettings(BaseSettings):
@@ -112,13 +128,21 @@ class RetrievalSettings(BaseSettings):
     )
 
     initial_top_k: int = 8
+    candidate_pool_size: int = 30
     max_rounds: int = 6
     max_tool_calls: int = 12
     max_read_tokens: int = 12_000
     max_wall_time_ms: int = 12_000
+    weight_document: float = 0.85
+    weight_section: float = 1.0
+    weight_subsection: float = 1.0
+    weight_chunk: float = 1.0
+    rerank_enabled: bool = False
+    min_score: float | None = None
 
     @field_validator(
         "initial_top_k",
+        "candidate_pool_size",
         "max_rounds",
         "max_tool_calls",
         "max_read_tokens",
@@ -126,6 +150,33 @@ class RetrievalSettings(BaseSettings):
     )
     @classmethod
     def _positive(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("must be >= 1")
+        return value
+
+
+class IndexingSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="VIKINGRAG_INDEXING_",
+        env_file=_ENV_FILE,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    summary_concurrency: int = 4
+    summary_max_input_tokens: int = 2_000
+    summary_max_output_tokens: int = 256
+    summary_version: str = "1"
+    preview_chars: int = 240
+
+    @field_validator(
+        "summary_concurrency",
+        "summary_max_input_tokens",
+        "summary_max_output_tokens",
+        "preview_chars",
+    )
+    @classmethod
+    def _positive_index(cls, value: int) -> int:
         if value < 1:
             raise ValueError("must be >= 1")
         return value
@@ -175,7 +226,14 @@ class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
+    indexing: IndexingSettings = Field(default_factory=IndexingSettings)
     ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
+
+    @model_validator(mode="after")
+    def _pool_vs_top_k(self) -> Settings:
+        if self.retrieval.candidate_pool_size < self.retrieval.initial_top_k:
+            raise ValueError("retrieval.candidate_pool_size must be >= initial_top_k")
+        return self
 
 
 @lru_cache(maxsize=1)
