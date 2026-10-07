@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from uuid import uuid4
 
+from vikingrag.application.budget import RetrievalContext
 from vikingrag.domain.models.document import NodeType
 from vikingrag.domain.models.representation import (
     EmbeddingIdentity,
@@ -66,8 +67,10 @@ class SemanticSearchService:
         *,
         budget: RetrievalBudget | None = None,
         trace: RetrievalTrace | None = None,
+        ctx: RetrievalContext | None = None,
     ) -> SearchResponse:
-        query_id = uuid4()
+        context = ctx or RetrievalContext.create(budget=budget)
+        query_id = context.query_id if ctx is not None else uuid4()
         total_started = time.perf_counter()
         identity = self.embedding_identity()
         top_k = request.top_k or self._retrieval.initial_top_k
@@ -77,135 +80,156 @@ class SemanticSearchService:
             request.min_score if request.min_score is not None else self._retrieval.min_score
         )
 
-        if budget is not None and budget.max_embedding_calls < 1:
-            raise ValueError("RetrievalBudget exhausted for embeddings")
+        # Scope: client document_ids narrow permitted set (never widen)
+        scoped_docs = context.narrow_document_ids(list(request.document_ids))
+        if request.document_ids and not scoped_docs:
+            scoped_docs = ()  # narrow_document_ids raises if permitted nonempty mismatch
 
-        embed_started = time.perf_counter()
-        embedded = await self._embeddings.embed_text(request.query)
-        embedding_ms = (time.perf_counter() - embed_started) * 1000.0
-        query_vector = embedded.vectors[0]
+        async with context.tool_call("search"):
+            context.check_deadline()
+            cache_key = (request.query, identity.key())
+            cached = context.get_cached_query_embedding(cache_key)
+            embed_started = time.perf_counter()
+            if cached is not None:
+                query_vector = cached
+                embedding_ms = 0.0
+                embedding_calls = 0
+            else:
+                await context.reserve(embedding_calls=1)
+                embedded = await self._embeddings.embed_text(request.query)
+                query_vector = embedded.vectors[0]
+                context.cache_query_embedding(cache_key, query_vector)
+                embedding_ms = (time.perf_counter() - embed_started) * 1000.0
+                embedding_calls = 1
 
-        vector_started = time.perf_counter()
-        async with self._database.session() as session:
-            repo = SqlEmbeddingRepository(session)
-            raw_hits = await repo.search_cosine(
-                query_vector,
-                identity=identity,
-                top_k=pool,
-                document_ids=request.document_ids,
-                node_types=request.node_types,
-                representation_types=request.representation_types,
-                min_score=min_score,
-            )
-        vector_ms = (time.perf_counter() - vector_started) * 1000.0
-
-        scored: list[SearchHit] = []
-        for hit in raw_hits:
-            weight = self.granularity_weight(hit.node_type)
-            score = hit.similarity * weight
-            if min_score is not None and score < min_score:
-                continue
-            scored.append(
-                SearchHit(
-                    uri=hit.uri,
-                    title=hit.title,
-                    node_id=hit.node_id,
-                    document_id=hit.document_id,
-                    node_type=hit.node_type,
-                    representation_type=hit.representation_type,
-                    score=score,
-                    similarity=hit.similarity,
-                    preview=hit.preview,
-                    metadata={
-                        "provider": hit.provider,
-                        "model": hit.model,
-                        "granularity_weight": weight,
-                    },
+            await context.reserve(vector_searches=1, db_operations=1)
+            vector_started = time.perf_counter()
+            async with self._database.session() as session:
+                repo = SqlEmbeddingRepository(session)
+                raw_hits = await repo.search_cosine(
+                    query_vector,
+                    identity=identity,
+                    top_k=pool,
+                    document_ids=scoped_docs if scoped_docs else request.document_ids,
+                    node_types=request.node_types,
+                    representation_types=request.representation_types,
+                    min_score=min_score,
                 )
-            )
-        scored.sort(key=lambda h: h.score, reverse=True)
+            vector_ms = (time.perf_counter() - vector_started) * 1000.0
+            await context.add_usage(nodes_inspected=len(raw_hits))
 
-        rerank_ms = 0.0
-        reranked = False
-        rerank_calls = 0
-        if self._rerank_enabled and scored:
-            rerank_started = time.perf_counter()
-            docs = [f"{h.title or ''}\n{h.preview}" for h in scored]
-            rerank_hits = await self._reranker.rerank(request.query, docs, top_n=top_k)
-            rerank_ms = (time.perf_counter() - rerank_started) * 1000.0
-            rerank_calls = 1
-            reranked = True
-            ordered: list[SearchHit] = []
-            for rh in rerank_hits:
-                if 0 <= rh.index < len(scored):
-                    base = scored[rh.index]
-                    ordered.append(
-                        SearchHit(
-                            uri=base.uri,
-                            title=base.title,
-                            node_id=base.node_id,
-                            document_id=base.document_id,
-                            node_type=base.node_type,
-                            representation_type=base.representation_type,
-                            score=float(rh.score),
-                            similarity=base.similarity,
-                            preview=base.preview,
-                            metadata={**base.metadata, "rerank_score": rh.score},
-                        )
+            # Drop hits outside permitted scope (defense in depth)
+            if context.permitted_document_ids is not None:
+                raw_hits = [h for h in raw_hits if h.document_id in context.permitted_document_ids]
+
+            scored: list[SearchHit] = []
+            for hit in raw_hits:
+                weight = self.granularity_weight(hit.node_type)
+                score = hit.similarity * weight
+                if min_score is not None and score < min_score:
+                    continue
+                scored.append(
+                    SearchHit(
+                        uri=hit.uri,
+                        title=hit.title,
+                        node_id=hit.node_id,
+                        document_id=hit.document_id,
+                        node_type=hit.node_type,
+                        representation_type=hit.representation_type,
+                        score=score,
+                        similarity=hit.similarity,
+                        preview=hit.preview,
+                        metadata={
+                            "provider": hit.provider,
+                            "model": hit.model,
+                            "granularity_weight": weight,
+                        },
                     )
-            scored = ordered
-        else:
-            scored = scored[:top_k]
+                )
+            scored.sort(key=lambda h: h.score, reverse=True)
 
-        total_ms = (time.perf_counter() - total_started) * 1000.0
-        usage = SearchUsage(
-            embedding_calls=1,
-            vector_searches=1,
-            candidates_inspected=len(raw_hits),
-            nodes_returned=len(scored),
-            rerank_calls=rerank_calls,
-        )
-        timing = SearchTiming(
-            embedding_ms=embedding_ms,
-            vector_ms=vector_ms,
-            rerank_ms=rerank_ms,
-            total_ms=total_ms,
-        )
+            rerank_ms = 0.0
+            reranked = False
+            rerank_calls = 0
+            if self._rerank_enabled and scored:
+                rerank_started = time.perf_counter()
+                docs = [f"{h.title or ''}\n{h.preview}" for h in scored]
+                rerank_hits = await self._reranker.rerank(request.query, docs, top_n=top_k)
+                rerank_ms = (time.perf_counter() - rerank_started) * 1000.0
+                rerank_calls = 1
+                reranked = True
+                ordered: list[SearchHit] = []
+                for rh in rerank_hits:
+                    if 0 <= rh.index < len(scored):
+                        base = scored[rh.index]
+                        ordered.append(
+                            SearchHit(
+                                uri=base.uri,
+                                title=base.title,
+                                node_id=base.node_id,
+                                document_id=base.document_id,
+                                node_type=base.node_type,
+                                representation_type=base.representation_type,
+                                score=float(rh.score),
+                                similarity=base.similarity,
+                                preview=base.preview,
+                                metadata={**base.metadata, "rerank_score": rh.score},
+                            )
+                        )
+                scored = ordered
+            else:
+                scored = scored[:top_k]
 
-        if trace is not None:
-            trace.record(
-                "search",
-                query_id=str(query_id),
-                top_k=top_k,
-                pool=pool,
-                returned=len(scored),
+            total_ms = (time.perf_counter() - total_started) * 1000.0
+            usage = SearchUsage(
+                embedding_calls=embedding_calls,
+                vector_searches=1,
+                candidates_inspected=len(raw_hits),
+                nodes_returned=len(scored),
+                rerank_calls=rerank_calls,
+            )
+            timing = SearchTiming(
                 embedding_ms=embedding_ms,
                 vector_ms=vector_ms,
                 rerank_ms=rerank_ms,
+                total_ms=total_ms,
             )
 
-        logger.info(
-            "search_completed",
-            query_id=str(query_id),
-            query_length=len(request.query),
-            top_k=top_k,
-            candidate_pool_size=pool,
-            returned_results=len(scored),
-            embedding_ms=embedding_ms,
-            vector_ms=vector_ms,
-            rerank_ms=rerank_ms,
-            total_ms=total_ms,
-            provider=identity.provider,
-            model=identity.model,
-            reranked=reranked,
-        )
+            if trace is not None:
+                trace.record(
+                    "search",
+                    query_id=str(query_id),
+                    top_k=top_k,
+                    pool=pool,
+                    returned=len(scored),
+                    embedding_ms=embedding_ms,
+                    vector_ms=vector_ms,
+                    rerank_ms=rerank_ms,
+                )
 
-        return SearchResponse(
-            query=request.query,
-            query_id=query_id,
-            candidates=tuple(scored),
-            timing=timing,
-            usage=usage,
-            embedding_identity=identity,
-            reranked=reranked,
-        )
+            logger.info(
+                "search_completed",
+                query_id=str(query_id),
+                trace_id=context.trace_id,
+                query_length=len(request.query),
+                top_k=top_k,
+                candidate_pool_size=pool,
+                returned_results=len(scored),
+                embedding_ms=embedding_ms,
+                vector_ms=vector_ms,
+                rerank_ms=rerank_ms,
+                total_ms=total_ms,
+                provider=identity.provider,
+                model=identity.model,
+                reranked=reranked,
+            )
+
+            return SearchResponse(
+                query=request.query,
+                query_id=query_id,
+                candidates=tuple(scored),
+                timing=timing,
+                usage=usage,
+                embedding_identity=identity,
+                reranked=reranked,
+            )

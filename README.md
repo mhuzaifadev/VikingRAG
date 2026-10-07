@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/mhuzaifadev/VikingRAG">
-    <img src="https://img.shields.io/badge/VikingRAG-0.2.0-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.2.0" />
+    <img src="https://img.shields.io/badge/VikingRAG-0.3.0-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.3.0" />
   </a>
 </p>
 
@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.2.0"><img src="https://img.shields.io/badge/release-v0.2.0-blue?logo=github" alt="Release v0.2.0" /></a>
+  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.3.0"><img src="https://img.shields.io/badge/release-v0.3.0-blue?logo=github" alt="Release v0.3.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?logo=apache" alt="Apache 2.0" /></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+" /></a>
   <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white" alt="FastAPI" /></a>
@@ -78,8 +78,8 @@ This project turns those ideas into a production-ready stack:
 | Hierarchical documents | `document → section → subsection → chunk` with stable URIs |
 | Multi-granular indexing | Bottom-up abstracts + embeddings at document/section/chunk |
 | Semantic Search | pgvector cosine discovery returning `viking://` URIs |
-| Cheap path / agents | Planned - escalate only when evidence is insufficient |
-| Evidence-first answers | Planned - claim → evidence → verification → citation |
+| Cheap path / agents | Evidence collect + sufficiency now; agent loop planned |
+| Evidence-first grounding | Authoritative Reads + assessed EvidenceBundle (no answers yet) |
 | Experience edges | Planned - reuse successful retrieval traces |
 | Production constraints | Typed config, migrations, health probes, adapters, tests |
 
@@ -97,10 +97,14 @@ This project turns those ideas into a production-ready stack:
 - **Hierarchical abstracts** - bottom-up summaries with token budgets and idempotent reuse
 - **Multi-granular embeddings** - chunk content + structural summaries with explicit embedding identity
 - **Semantic Search** - pgvector cosine retrieval with granularity weights and URI-addressable hits
+- **List / Grep / Read** - structural children, scoped literal Grep, authoritative Read with provenance
+- **Evidence collection** - bounded Search→List/Read pipeline assembling deduplicated evidence bundles
+- **Evidence sufficiency** - structured assessment (`sufficient` / `insufficient` / `unknown`) with citation checks
+- **Shared budgets** - cumulative tool/embedding/read/LLM limits across a request
 - **Replaceable providers** - OpenAI-compatible LLM/embeddings, deterministic fakes for offline tests
 - **Production foundation** - FastAPI, PostgreSQL + pgvector, Redis, object store, typed settings, health checks
 
-**Coming soon:** lexical `Grep`, structural `List` / `Read` tool wrappers, bounded agentic retrieval, evidence sufficiency, experience edges, and evaluation vs flat RAG.
+**Coming soon:** bounded agentic multi-round retrieval, experience edges, answer generation, and evaluation vs flat RAG.
 
 See [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md) for indexing and Search details.
 
@@ -269,6 +273,10 @@ Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 | `POST` | `/v1/documents/{id}/index` | Summarize + embed (idempotent) |
 | `GET` | `/v1/documents/{id}/index-status` | Index stage and counts |
 | `POST` | `/v1/search` | Semantic Search |
+| `POST` | `/v1/retrieval/list` | List direct children |
+| `POST` | `/v1/retrieval/grep` | Scoped literal Grep |
+| `POST` | `/v1/retrieval/read` | Authoritative Read |
+| `POST` | `/v1/retrieval/evidence` | Collect evidence + assess sufficiency |
 | `GET` | `/v1/nodes/{id}` | Node metadata (+ optional content) |
 | `GET` | `/v1/uris/resolve?uri=` | Resolve a `viking://…` URI |
 

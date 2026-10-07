@@ -139,6 +139,16 @@ class RetrievalSettings(BaseSettings):
     weight_chunk: float = 1.0
     rerank_enabled: bool = False
     min_score: float | None = None
+    # Evidence / primitive caps (server overrides larger client values)
+    max_list_limit: int = 100
+    max_grep_matches: int = 50
+    max_grep_descendants: int = 1000
+    max_read_tokens_per_call: int = 1000
+    max_evidence_candidates: int = 12
+    max_descent_depth: int = 2
+    max_bundle_tokens: int = 8_000
+    min_assessment_coverage: float = 1.0
+    assessor_provider: str = "scripted"
 
     @field_validator(
         "initial_top_k",
@@ -147,6 +157,12 @@ class RetrievalSettings(BaseSettings):
         "max_tool_calls",
         "max_read_tokens",
         "max_wall_time_ms",
+        "max_list_limit",
+        "max_grep_matches",
+        "max_grep_descendants",
+        "max_read_tokens_per_call",
+        "max_evidence_candidates",
+        "max_bundle_tokens",
     )
     @classmethod
     def _positive(cls, value: int) -> int:

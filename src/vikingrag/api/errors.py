@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from vikingrag.domain.errors import (
+    BudgetExhaustedError,
     ConflictError,
     DocumentAlreadyExists,
     DocumentNotFound,
@@ -15,6 +16,8 @@ from vikingrag.domain.errors import (
     InvalidVikingURI,
     NodeNotFound,
     NotFoundError,
+    ScopeDeniedError,
+    StaleSourceError,
     UnsupportedDocumentType,
     ValidationDomainError,
 )
@@ -67,6 +70,18 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ValidationDomainError)
     async def validation(_request: Request, exc: ValidationDomainError) -> JSONResponse:
         return JSONResponse(status_code=422, content=_payload(exc))
+
+    @app.exception_handler(ScopeDeniedError)
+    async def scope_denied(_request: Request, exc: ScopeDeniedError) -> JSONResponse:
+        return JSONResponse(status_code=403, content=_payload(exc))
+
+    @app.exception_handler(StaleSourceError)
+    async def stale_source(_request: Request, exc: StaleSourceError) -> JSONResponse:
+        return JSONResponse(status_code=409, content=_payload(exc))
+
+    @app.exception_handler(BudgetExhaustedError)
+    async def budget_exhausted(_request: Request, exc: BudgetExhaustedError) -> JSONResponse:
+        return JSONResponse(status_code=429, content=_payload(exc))
 
     @app.exception_handler(DomainError)
     async def domain(_request: Request, exc: DomainError) -> JSONResponse:

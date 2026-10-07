@@ -5,7 +5,7 @@ from __future__ import annotations
 from vikingrag.domain.errors import DocumentNotFound, InvalidVikingURI, NodeNotFound
 from vikingrag.domain.models.document import DocumentId, NodeId
 from vikingrag.domain.models.node import DocumentNode, TreeNode
-from vikingrag.domain.uri import VikingURI, VikingURIKind, VikingURIParser
+from vikingrag.domain.uri import VikingURIKind, VikingURIParser
 from vikingrag.infrastructure.database.repositories.document import SqlDocumentRepository
 from vikingrag.infrastructure.database.repositories.node import SqlNodeRepository
 
@@ -47,7 +47,7 @@ class StructuralNavigationService:
         await self.get_node(node_id)
         return await self._nodes.list_descendants(node_id)
 
-    async def resolve_uri(self, uri: str) -> DocumentNode | VikingURI:
+    async def resolve_uri(self, uri: str) -> DocumentNode:
         parsed = VikingURIParser.parse(uri)
         if parsed.kind is VikingURIKind.DOCUMENT:
             root = await self._nodes.get_root(parsed.document_id)

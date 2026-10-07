@@ -96,3 +96,24 @@ class IndexingError(DomainError):
 class DocumentNotReadyError(ValidationDomainError):
     def __init__(self, message: str) -> None:
         DomainError.__init__(self, message, code="document_not_ready")
+
+
+class BudgetExhaustedError(DomainError):
+    def __init__(self, resource: str) -> None:
+        super().__init__(f"Retrieval budget exhausted: {resource}", code="budget_exhausted")
+        self.resource = resource
+
+
+class StaleSourceError(ConflictError):
+    def __init__(self, message: str) -> None:
+        DomainError.__init__(self, message, code="stale_source")
+
+
+class ScopeDeniedError(ValidationDomainError):
+    def __init__(self, message: str) -> None:
+        DomainError.__init__(self, message, code="scope_denied")
+
+
+class AssessmentValidationError(DomainError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="assessment_validation_error")

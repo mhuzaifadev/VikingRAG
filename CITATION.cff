@@ -9,7 +9,7 @@ authors:
     given-names: Muhammad
 repository-code: "https://github.com/mhuzaifadev/VikingRAG"
 license: Apache-2.0
-version: 0.2.0
+version: 0.3.0
 date-released: "2026-10-07"
 abstract: >-
   Production-oriented hierarchical retrieval platform inspired by VikingRAG.

@@ -11,7 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from vikingrag import __version__
 from vikingrag.api.errors import register_exception_handlers
-from vikingrag.api.routers import documents_router, health_router, search_router
+from vikingrag.api.routers import documents_router, health_router, retrieval_router, search_router
 from vikingrag.infrastructure.cache.redis import create_redis_client
 from vikingrag.infrastructure.database.engine import create_database
 from vikingrag.infrastructure.object_store.local import LocalObjectStore
@@ -67,7 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title="VikingRAG",
         description=(
             "Production-oriented hierarchical retrieval platform inspired by VikingRAG. "
-            "Hierarchical ingestion, structural navigation, and semantic Search."
+            "Hierarchical ingestion, semantic Search, List/Grep/Read, and evidence sufficiency."
         ),
         version=__version__,
         lifespan=lifespan,
@@ -81,6 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(documents_router)
     app.include_router(search_router)
+    app.include_router(retrieval_router)
     return app
 
 
