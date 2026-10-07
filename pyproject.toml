@@ -1,0 +1,94 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vikingrag"
+version = "0.1.0"
+description = "VikingRAG: production-oriented hierarchical retrieval platform"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Muhammad Huzaifa" }]
+keywords = ["rag", "retrieval", "vikingrag", "fastapi", "pgvector", "hierarchical"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.12",
+  "Framework :: FastAPI",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "pydantic>=2.9.0",
+  "pydantic-settings>=2.6.0",
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30.0",
+  "alembic>=1.14.0",
+  "pgvector>=0.3.6",
+  "redis>=5.2.0",
+  "structlog>=24.4.0",
+  "python-multipart>=0.0.17",
+  "httpx>=0.28.0",
+  "pypdf>=5.1.0",
+  "tiktoken>=0.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-asyncio>=0.24.0",
+  "ruff>=0.8.0",
+  "mypy>=1.13.0",
+  "pre-commit>=4.0.0",
+  "types-redis>=4.6.0",
+]
+
+[project.scripts]
+vikingrag-api = "vikingrag.api.app:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vikingrag"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/vikingrag", "migrations", "alembic.ini", "README.md"]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["vikingrag"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+mypy_path = "src"
+packages = ["vikingrag"]
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+  "integration: tests that require Docker services (Postgres, Redis)",
+]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["vikingrag"]
+branch = true

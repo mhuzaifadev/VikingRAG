@@ -1,0 +1,30 @@
+VikingRAG
+Copyright 2026 Muhammad Huzaifa and contributors
+
+This product is independently engineered software inspired by the VikingRAG
+research paper. It is not a copy, fork, or redistribution of the official
+VikingRAG / OpenViking research codebases (which are separately licensed).
+
+------------------------------------------------------------------------------
+Academic attribution (required when citing this work or its methods)
+------------------------------------------------------------------------------
+
+This implementation is inspired by concepts described in:
+
+  Peiyuan Gao et al.,
+  "VikingRAG: Accurate and Token-efficient Retrieval-augmented Generation
+   over Structured Documents",
+  arXiv:2609.11390, 2026.
+  https://arxiv.org/abs/2609.11390
+
+If you use VikingRAG in academic work, please cite the paper above
+(see also CITATION.cff). Citing this repository in addition to the paper
+is appreciated but optional.
+
+------------------------------------------------------------------------------
+Third-party notices
+------------------------------------------------------------------------------
+
+This project depends on open-source libraries distributed under their own
+licenses (e.g. FastAPI, SQLAlchemy, Pydantic, pgvector, Redis client, pypdf,
+tiktoken). See those packages for their license terms.

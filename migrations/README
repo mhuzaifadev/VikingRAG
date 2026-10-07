@@ -1,0 +1,12 @@
+Alembic migrations for VikingRAG.
+
+Run:
+
+```bash
+make migrate
+# or
+uv run alembic upgrade head
+```
+
+The first revision enables the PostgreSQL `vector` extension and creates the
+`documents` table. Additional hierarchy / retrieval tables arrive in later phases.

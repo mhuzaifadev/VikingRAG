@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+.dmypy.json
+dmypy.json
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Local runtime data
+data/
+*.db
+
+# Internal / non-public documentation (kept local)
+docs/
+
+# Editor / agent tooling (local)
+.cursor/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Docker / tooling
+.docker/
+
+# uv
+uv.lock.bak
+
+# Testcontainers / caches
+.testcontainers/
+*.log

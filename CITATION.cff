@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+title: "VikingRAG"
+message: >-
+  If you use this software, please cite the VikingRAG research paper that
+  inspired it. Optionally also cite this software repository.
+type: software
+authors:
+ - family-names: Huzaifa
+    given-names: Muhammad
+repository-code: "https://github.com/mhuzaifadev/VikingRAG"
+license: Apache-2.0
+version: 0.1.0
+date-released: "2026-10-07"
+abstract: >-
+  Production-oriented hierarchical retrieval platform inspired by VikingRAG.
+  Independently implemented; not a redistribution of the AGPL research artifact.
+references:
+ - type: article
+    title: "VikingRAG: Accurate and Token-efficient Retrieval-augmented Generation over Structured Documents"
+    authors:
+     - family-names: Gao
+        given-names: Peiyuan
+     - name: "et al."
+    year: 2026
+    doi: "10.48550/arXiv.2609.11390"
+    url: "https://arxiv.org/abs/2609.11390"
+    identifiers:
+     - type: other
+        value: "arXiv:2609.11390"
+        description: arXiv preprint identifier
