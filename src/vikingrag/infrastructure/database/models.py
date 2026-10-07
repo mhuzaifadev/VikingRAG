@@ -7,11 +7,21 @@ from typing import Any
 from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-# Default pgvector column width - must match migration 20261007_0003
+# Default pgvector column width - must match migrations 20261007_0003 / 0004
 DEFAULT_VECTOR_DIMENSIONS = 1536
 
 
@@ -175,6 +185,139 @@ class NodeEmbeddingRow(Base):
     dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
     identity_version: Mapped[str] = mapped_column(String(64), nullable=False, default="1")
     embedding: Mapped[Any] = mapped_column(Vector(DEFAULT_VECTOR_DIMENSIONS), nullable=False)
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class QueryRunRow(Base):
+    __tablename__ = "query_runs"
+
+    id: Mapped[Any] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[Any | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    corpus_id: Mapped[Any | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)
+    query_embedding: Mapped[Any | None] = mapped_column(
+        Vector(DEFAULT_VECTOR_DIMENSIONS), nullable=True
+    )
+    embedding_provider: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    embedding_dimensions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    embedding_identity_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    route: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sufficiency_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False, default="pending", index=True)
+    edge_build_status: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="none", index=True
+    )
+    edge_build_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    total_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retrieval_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    llm_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retrieval_rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    document_ids: Mapped[list[Any]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False, default=list
+    )
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class RetrievalEventRow(Base):
+    __tablename__ = "retrieval_events"
+
+    id: Mapped[Any] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    query_run_id: Mapped[Any] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("query_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    round_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    arguments: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    result_refs: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    token_cost: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class ExperiencePayloadRow(Base):
+    __tablename__ = "experience_payloads"
+    __table_args__ = (UniqueConstraint("query_run_id", name="uq_experience_payloads_query_run_id"),)
+
+    id: Mapped[Any] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    query_run_id: Mapped[Any] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("query_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)
+    query_embedding: Mapped[Any] = mapped_column(Vector(DEFAULT_VECTOR_DIMENSIONS), nullable=False)
+    embedding_provider: Mapped[str] = mapped_column(String(128), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(256), nullable=False)
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_identity_version: Mapped[str] = mapped_column(String(64), nullable=False, default="1")
+    trace_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    support_uris: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class ExperienceEdgeRow(Base):
+    __tablename__ = "experience_edges"
+    __table_args__ = (
+        CheckConstraint("source_uri <> target_uri", name="ck_experience_edges_no_self"),
+    )
+
+    id: Mapped[Any] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    payload_id: Mapped[Any] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("experience_payloads.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_uri: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    target_uri: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False, default="active", index=True)
+    source_node_id: Mapped[Any | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    target_node_id: Mapped[Any | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    source_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    target_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    support_score: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict
     )

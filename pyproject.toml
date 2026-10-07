@@ -4,19 +4,37 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vikingrag"
-version = "0.3.0"
-description = "VikingRAG: production-oriented hierarchical retrieval platform"
+version = "0.4.0"
+description = "Production hierarchical RAG: structure-aware Search, agentic retrieval, experience edges"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Muhammad Huzaifa" }]
-keywords = ["rag", "retrieval", "vikingrag", "fastapi", "pgvector", "hierarchical"]
+authors = [
+  { name = "Muhammad Huzaifa Shahbaz", email = "kinghuzaifa.shahbaz@gmail.com" },
+]
+maintainers = [
+  { name = "Muhammad Huzaifa Shahbaz", email = "kinghuzaifa.shahbaz@gmail.com" },
+]
+keywords = [
+  "rag",
+  "retrieval",
+  "vikingrag",
+  "fastapi",
+  "pgvector",
+  "hierarchical",
+  "llm",
+]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Framework :: FastAPI",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Typing :: Typed",
 ]
 dependencies = [
   "fastapi>=0.115.0",
@@ -36,6 +54,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+docx = ["python-docx>=1.1.0"]
 dev = [
   "pytest>=8.3.0",
   "pytest-asyncio>=0.24.0",
@@ -43,16 +62,37 @@ dev = [
   "mypy>=1.13.0",
   "pre-commit>=4.0.0",
   "types-redis>=4.6.0",
+  "python-docx>=1.1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mhuzaifadev/VikingRAG"
+Repository = "https://github.com/mhuzaifadev/VikingRAG"
+Issues = "https://github.com/mhuzaifadev/VikingRAG/issues"
+Changelog = "https://github.com/mhuzaifadev/VikingRAG/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/mhuzaifadev/VikingRAG/blob/main/docs/README.md"
 
 [project.scripts]
 vikingrag-api = "vikingrag.api.app:run"
+vikingrag-eval = "vikingrag.evaluation.cli:main"
+vikingrag-migrate = "vikingrag.migrate:main"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/vikingrag",
+  "migrations",
+  "alembic.ini",
+  "README.md",
+  "LICENSE",
+  "CHANGELOG.md",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vikingrag"]
 
-[tool.hatch.build.targets.sdist]
-include = ["src/vikingrag", "migrations", "alembic.ini", "README.md"]
+# Ship Alembic scripts inside the installed package for `vikingrag-migrate`.
+[tool.hatch.build.targets.wheel.force-include]
+"migrations" = "vikingrag/migrations"
 
 [tool.uv]
 package = true

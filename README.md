@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/mhuzaifadev/VikingRAG">
-    <img src="https://img.shields.io/badge/VikingRAG-0.3.0-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.3.0" />
+    <img src="https://img.shields.io/badge/VikingRAG-0.4.0-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.4.0" />
   </a>
 </p>
 
@@ -25,28 +25,32 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.3.0"><img src="https://img.shields.io/badge/release-v0.3.0-blue?logo=github" alt="Release v0.3.0" /></a>
+  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.4.0"><img src="https://img.shields.io/badge/release-v0.4.0-blue?logo=github" alt="Release v0.4.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?logo=apache" alt="Apache 2.0" /></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+" /></a>
   <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white" alt="FastAPI" /></a>
   <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL + pgvector" /></a>
   <a href="https://redis.io/"><img src="https://img.shields.io/badge/Redis-ready-DC382D?logo=redis&logoColor=white" alt="Redis" /></a>
-  <a href="https://docs.astral.sh/ruff/"><img src="https://img.shields.io/badge/Ruff-lint-261230?logo=ruff&logoColor=white" alt="Ruff" /></a>
+  <a href="https://pypi.org/project/vikingrag/"><img src="https://img.shields.io/pypi/v/vikingrag?logo=pypi&logoColor=white&label=PyPI" alt="PyPI" /></a>
   <a href="https://arxiv.org/abs/2609.11390"><img src="https://img.shields.io/badge/arXiv-2609.11390-b31b1b?logo=arxiv&logoColor=white" alt="arXiv paper" /></a>
 </p>
 
 <p align="center">
+  <a href="#install"><strong>Install</strong></a>
+  ·
   <a href="#features"><strong>Features</strong></a>
   ·
   <a href="#architecture"><strong>Architecture</strong></a>
   ·
   <a href="#quick-start"><strong>Quick start</strong></a>
   ·
+  <a href="#sdk"><strong>SDK</strong></a>
+  ·
   <a href="#api"><strong>API</strong></a>
   ·
-  <a href="#citation"><strong>Cite</strong></a>
+  <a href="docs/README.md"><strong>Docs</strong></a>
   ·
-  <a href="#license"><strong>License</strong></a>
+  <a href="#citation"><strong>Cite</strong></a>
 </p>
 
 <p align="center">
@@ -75,15 +79,89 @@ This project turns those ideas into a production-ready stack:
 
 | Research idea | This repo today |
 |---|---|
-| Hierarchical documents | `document → section → subsection → chunk` with stable URIs |
+| Hierarchical documents | `document → section → subsection → chunk` with stable + canonical object URIs |
 | Multi-granular indexing | Bottom-up abstracts + embeddings at document/section/chunk |
 | Semantic Search | pgvector cosine discovery returning `viking://` URIs |
-| Cheap path / agents | Evidence collect + sufficiency now; agent loop planned |
-| Evidence-first grounding | Authoritative Reads + assessed EvidenceBundle (no answers yet) |
-| Experience edges | Planned - reuse successful retrieval traces |
-| Production constraints | Typed config, migrations, health probes, adapters, tests |
+| Cheap path / agents | Algorithm 1 agentic loop; E+ one-round fast path then escalate |
+| Evidence-first grounding | Authoritative Reads, citations, `POST /v1/answers` |
+| Experience edges | Algorithm 2 construction + Algorithm 3 Search+ (γ-gated) |
+| Production constraints | Auth allowlist, migrations, prod Compose, eval smoke, typed settings |
 
 > **Independent implementation** inspired by the paper - not a fork of the AGPL research artifacts.
+
+### Comparison visuals
+
+Drop charts into [`docs/assets/`](docs/assets/) (see that folder’s README), then uncomment:
+
+<!--
+<p align="center">
+  <img src="docs/assets/comparison-tokens.png" alt="Token cost vs baselines" width="720" />
+</p>
+<p align="center">
+  <img src="docs/assets/comparison-accuracy.png" alt="Accuracy vs baselines" width="720" />
+</p>
+-->
+
+Best place for side-by-side paper-style figures is **right here** (under Why), or a short **Results** section after Features. Use only real measurements or clearly cited paper figures — never invent scores.
+
+---
+
+## Install
+
+### Option A — PyPI (fastest on any laptop)
+
+```bash
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -U vikingrag
+# optional richer DOCX parsing:
+# pip install "vikingrag[docx]"
+```
+
+You still need **Postgres + pgvector** and **Redis**, plus a `.env` (copy from the [repo `.env.example`](https://github.com/mhuzaifadev/VikingRAG/blob/main/.env.example)):
+
+```bash
+export VIKINGRAG_DATABASE_URL=postgresql+asyncpg://vikingrag:vikingrag@localhost:5432/vikingrag
+export VIKINGRAG_REDIS_URL=redis://localhost:6379/0
+export VIKINGRAG_LLM_PROVIDER=fake          # or openai / deepseek / gemini / anthropic
+export VIKINGRAG_EMBEDDING_PROVIDER=deterministic
+
+vikingrag-migrate upgrade head
+vikingrag-api
+# API: http://localhost:8000/docs
+```
+
+SDK:
+
+```python
+from vikingrag import VikingRAGClient
+client = VikingRAGClient.from_settings()
+```
+
+### Option B — Clone + uv (full stack / contributors)
+
+```bash
+git clone https://github.com/mhuzaifadev/VikingRAG.git
+cd VikingRAG
+cp .env.example .env
+# Python 3.12+, https://docs.astral.sh/uv/
+make install && make docker-up && make migrate && make dev
+```
+
+### Option C — pip from GitHub (pre-release / specific tag)
+
+```bash
+pip install "git+https://github.com/mhuzaifadev/VikingRAG.git@v0.4.0"
+```
+
+### Option D — Docker Compose
+
+```bash
+git clone https://github.com/mhuzaifadev/VikingRAG.git && cd VikingRAG
+cp .env.example .env
+docker compose up -d --build
+```
+
+Production-shaped: `docker compose -f docker-compose.prod.yml up -d --build` — see [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ---
 
@@ -100,13 +178,17 @@ This project turns those ideas into a production-ready stack:
 - **List / Grep / Read** - structural children, scoped literal Grep, authoritative Read with provenance
 - **Evidence collection** - bounded Search→List/Read pipeline assembling deduplicated evidence bundles
 - **Evidence sufficiency** - structured assessment (`sufficient` / `insufficient` / `unknown`) with citation checks
+- **Agentic Algorithm 1** - tool-calling Search/List/Grep/Read loop with shared budgets and finalization reserve
+- **Answers API** - `POST /v1/answers` and `POST /v1/query` with modes `vikingrag` / `vikingrag_e` / `vikingrag_e_plus`
+- **Experience edges** - Algorithm 2 learning jobs + Algorithm 3 Search+ expansion
+- **Evaluation scaffolding** - six dataset adapters + offline smoke (`vikingrag-eval smoke --offline`)
+- **Auth** - optional API-key + server document allowlist (single-tenant)
 - **Shared budgets** - cumulative tool/embedding/read/LLM limits across a request
-- **Replaceable providers** - OpenAI-compatible LLM/embeddings, deterministic fakes for offline tests
+- **Replaceable providers** - `openai` / `deepseek` / `gemini` / `anthropic` / `vllm`; fakes rejected in production
+- **SDK facade** - `VikingRAGClient` for embed-in-process use without FastAPI
 - **Production foundation** - FastAPI, PostgreSQL + pgvector, Redis, object store, typed settings, health checks
 
-**Coming soon:** bounded agentic multi-round retrieval, experience edges, answer generation, and evaluation vs flat RAG.
-
-See [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md) for indexing and Search details.
+**Docs hub:** [`docs/README.md`](docs/README.md) · [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md) · [`docs/PAPER_PARITY.md`](docs/PAPER_PARITY.md) · [`AGENTS.md`](AGENTS.md)
 
 ---
 
@@ -208,35 +290,14 @@ src/vikingrag/
 
 ## Quick start
 
-### Prerequisites
-
-| Tool | Notes |
-|---|---|
-| ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white) | Required |
-| ![uv](https://img.shields.io/badge/uv-package_manager-DE5FE9?logo=uv&logoColor=white) | Recommended |
-| ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white) | Optional; or local Postgres + Redis |
-
-### Install & run
+After [Install](#install), check health:
 
 ```bash
-git clone https://github.com/mhuzaifadev/VikingRAG.git
-cd VikingRAG
-cp .env.example .env
-
-make install
-make migrate
-make docker-up
-# or: make dev
+curl -s http://localhost:8000/health/live  | jq
+curl -s http://localhost:8000/health/ready | jq
 ```
 
-Health:
-
-```bash
-curl -s http://localhost:8000/v1/health/live  | jq
-curl -s http://localhost:8000/v1/health/ready | jq
-```
-
-Ingest a document, index it, and search:
+Ingest a document, index it, and search (with `.env` defaults: `VIKINGRAG_LLM_PROVIDER=fake`, `VIKINGRAG_EMBEDDING_PROVIDER=deterministic`):
 
 ```bash
 curl -s -X POST http://localhost:8000/v1/documents \
@@ -246,8 +307,6 @@ curl -s -X POST http://localhost:8000/v1/documents \
 DOC_ID="<document_id from response>"
 curl -s "http://localhost:8000/v1/documents/${DOC_ID}/tree" | jq
 
-# Requires VIKINGRAG_LLM_PROVIDER=fake and VIKINGRAG_EMBEDDING_PROVIDER=deterministic
-# (see .env.example) or real OpenAI-compatible credentials.
 curl -s -X POST "http://localhost:8000/v1/documents/${DOC_ID}/index" \
   -H "Content-Type: application/json" \
   -d '{"force_summaries":false,"force_embeddings":false}' | jq
@@ -257,7 +316,62 @@ curl -s -X POST http://localhost:8000/v1/search \
   -d '{"query":"How do we verify retrieved evidence?","top_k":5}' | jq
 ```
 
-Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+Interactive API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+---
+
+## Verify before go-live
+
+`0.4.0` is an **algorithm-complete milestone**, not “I ran paper Tables 3–5.” Use this ladder:
+
+```bash
+# 1) Offline gates (always)
+make install && make lint && make typecheck && make test
+uv run vikingrag-eval smoke --offline
+
+# 2) Integration (Postgres + Redis)
+make docker-up && make migrate && make test-integration
+
+# 3) Local API with fake/deterministic providers (wiring only)
+make dev
+# then ingest → index → search → POST /v1/answers (see Quick start)
+
+# 4) Production-shaped stack with real providers + auth
+#    (see docs/OPERATIONS.md — rejects fake/scripted/deterministic)
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Full checklist and result meanings: [`docs/OPERATIONS.md`](docs/OPERATIONS.md#pre-live-checklist).
+
+**What counts as a result today**
+
+| Output | How | Claims |
+|---|---|---|
+| Unit / lint / mypy | `make test` etc. | Code quality |
+| Offline eval smoke JSON | `vikingrag-eval smoke --offline` | Fixture integrity only (`measured_scores: null`) |
+| Integration pass | `make test-integration` | DB/migrate/API contracts |
+| Paper accuracy/token tables | Paid corpora + real LLM runs | **BLOCKED** until you run them — never invent |
+
+---
+
+## SDK
+
+Embed VikingRAG in your process (same settings / providers as the API):
+
+```python
+from vikingrag import VikingRAGClient
+
+client = VikingRAGClient.from_settings()
+# await client.search.search(...)
+# await client.answer_generator().generate(...)
+# await client.aclose()
+```
+
+Providers via env: `VIKINGRAG_LLM_PROVIDER=openai|deepseek|gemini|anthropic|vllm` (and matching embeddings). Production forbids `fake` / `deterministic` / `scripted`.
+
+```bash
+pip install vikingrag
+```
 
 ---
 
@@ -265,18 +379,20 @@ Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/v1/health/live` | Liveness |
-| `GET` | `/v1/health/ready` | Readiness (Postgres + Redis) |
-| `POST` | `/v1/documents` | Multipart ingest (`.md` / `.txt` / `.pdf`) |
+| `GET` | `/health/live` | Liveness |
+| `GET` | `/health/ready` | Readiness (Postgres + Redis) |
+| `POST` | `/v1/documents` | Multipart ingest (`.md` / `.txt` / `.pdf` / `.docx`) |
 | `GET` | `/v1/documents/{id}` | Document metadata |
 | `GET` | `/v1/documents/{id}/tree` | Structural tree |
 | `POST` | `/v1/documents/{id}/index` | Summarize + embed (idempotent) |
 | `GET` | `/v1/documents/{id}/index-status` | Index stage and counts |
-| `POST` | `/v1/search` | Semantic Search |
+| `POST` | `/v1/search` | Semantic Search (`scope_uri` optional) |
 | `POST` | `/v1/retrieval/list` | List direct children |
-| `POST` | `/v1/retrieval/grep` | Scoped literal Grep |
+| `POST` | `/v1/retrieval/grep` | Scoped Grep |
 | `POST` | `/v1/retrieval/read` | Authoritative Read |
 | `POST` | `/v1/retrieval/evidence` | Collect evidence + assess sufficiency |
+| `POST` | `/v1/answers` | Cited answer (`vikingrag` / `vikingrag_e` / `vikingrag_e_plus`) |
+| `POST` | `/v1/query` | Mode-switched query orchestration |
 | `GET` | `/v1/nodes/{id}` | Node metadata (+ optional content) |
 | `GET` | `/v1/uris/resolve?uri=` | Resolve a `viking://…` URI |
 
@@ -293,7 +409,8 @@ Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 | `make test` | Unit tests |
 | `make test-integration` | Integration tests (Postgres + Redis) |
 | `make migrate` | Apply Alembic migrations |
-| `make docker-up` / `make docker-down` | Compose stack |
+| `make docker-up` / `make docker-down` | Compose stack (volumes preserved on down) |
+| `uv run vikingrag-eval smoke --offline` | Offline evaluation scaffolding smoke |
 
 ---
 

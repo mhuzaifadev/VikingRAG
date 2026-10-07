@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import Any
 
 import httpx
 
 from vikingrag.domain.errors import ProviderError
-from vikingrag.providers.llm.base import ChatMessage, LLMResponse
+from vikingrag.providers.llm.base import (
+    ChatMessage,
+    FinishReason,
+    LLMResponse,
+    TokenUsage,
+    ToolCall,
+    ToolDefinition,
+)
 
 
 class OpenAICompatibleLLMProvider:
@@ -54,13 +62,15 @@ class OpenAICompatibleLLMProvider:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_schema: dict[str, Any] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
         if not self._api_key:
             raise ProviderError("LLM API key is not configured")
 
         payload: dict[str, Any] = {
             "model": model or self._model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [_message_to_openai(m) for m in messages],
             "temperature": (self._default_temperature if temperature is None else temperature),
         }
         if max_tokens is not None:
@@ -70,6 +80,10 @@ class OpenAICompatibleLLMProvider:
                 "type": "json_schema",
                 "json_schema": response_schema,
             }
+        if tools:
+            payload["tools"] = [_tool_to_openai(t) for t in tools]
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
 
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -91,16 +105,10 @@ class OpenAICompatibleLLMProvider:
                 if response.status_code >= 400:
                     raise ProviderError(f"LLM provider returned HTTP {response.status_code}")
                 data = response.json()
-                choice = (data.get("choices") or [{}])[0]
-                message = choice.get("message") or {}
-                content = str(message.get("content") or "")
-                usage = data.get("usage") or {}
-                return LLMResponse(
-                    content=content,
-                    model=str(data.get("model") or payload["model"]),
-                    input_tokens=_as_optional_int(usage.get("prompt_tokens")),
-                    output_tokens=_as_optional_int(usage.get("completion_tokens")),
-                    raw={"latency_ms": (time.perf_counter() - started) * 1000.0},
+                return _parse_openai_response(
+                    data,
+                    default_model=str(payload["model"]),
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
                 )
             except ProviderError:
                 raise
@@ -115,6 +123,142 @@ class OpenAICompatibleLLMProvider:
                     raise ProviderError("LLM provider request failed") from exc
                 await asyncio.sleep(0.2 * (2**attempt))
         raise ProviderError(f"LLM provider failed after retries: {last_error}")
+
+
+def _tool_to_openai(tool: ToolDefinition) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.function.name,
+            "description": tool.function.description,
+            "parameters": tool.function.parameters,
+        },
+    }
+
+
+def _message_to_openai(message: ChatMessage) -> dict[str, Any]:
+    payload: dict[str, Any] = {"role": message.role}
+    if message.content is not None:
+        payload["content"] = message.content
+    elif message.role == "assistant" and message.tool_calls:
+        # OpenAI allows null/omitted content when tool_calls are present
+        payload["content"] = None
+    else:
+        payload["content"] = message.content or ""
+
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.name,
+                    "arguments": tc.arguments_raw
+                    if tc.arguments_raw
+                    else json.dumps(tc.arguments, separators=(",", ":")),
+                },
+            }
+            for tc in message.tool_calls
+        ]
+    if message.tool_call_id is not None:
+        payload["tool_call_id"] = message.tool_call_id
+    if message.name is not None:
+        payload["name"] = message.name
+    return payload
+
+
+def _parse_openai_response(
+    data: dict[str, Any],
+    *,
+    default_model: str,
+    latency_ms: float,
+) -> LLMResponse:
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    raw_content = message.get("content")
+    content: str | None = None if raw_content is None else str(raw_content)
+
+    tool_calls = tuple(_parse_tool_call(tc) for tc in (message.get("tool_calls") or []))
+    finish = _map_finish_reason(choice.get("finish_reason"), has_tool_calls=bool(tool_calls))
+    usage_raw = data.get("usage") or {}
+    usage = TokenUsage(
+        input_tokens=_as_optional_int(usage_raw.get("prompt_tokens")),
+        output_tokens=_as_optional_int(usage_raw.get("completion_tokens")),
+        total_tokens=_as_optional_int(usage_raw.get("total_tokens")),
+    )
+    return LLMResponse(
+        content=content,
+        model=str(data.get("model") or default_model),
+        finish_reason=finish,
+        tool_calls=tool_calls,
+        usage=usage,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        raw={"latency_ms": latency_ms, "provider": "openai_compatible"},
+    )
+
+
+def _parse_tool_call(raw: Any) -> ToolCall:
+    if not isinstance(raw, dict):
+        return ToolCall(
+            id="invalid",
+            name="unknown",
+            arguments={},
+            arguments_raw="",
+            arguments_valid=False,
+        )
+    fn = raw.get("function") or {}
+    name = str(fn.get("name") or "unknown")
+    call_id = str(raw.get("id") or f"call_{name}")
+    arguments_raw = fn.get("arguments")
+    if arguments_raw is None:
+        arguments_raw = "{}"
+    elif not isinstance(arguments_raw, str):
+        try:
+            arguments_raw = json.dumps(arguments_raw)
+        except (TypeError, ValueError):
+            arguments_raw = str(arguments_raw)
+    arguments, valid = _parse_arguments(arguments_raw)
+    return ToolCall(
+        id=call_id,
+        name=name,
+        arguments=arguments,
+        arguments_raw=arguments_raw,
+        arguments_valid=valid,
+    )
+
+
+def _parse_arguments(raw: str) -> tuple[dict[str, Any], bool]:
+    text = raw.strip() if raw else "{}"
+    if not text:
+        return {}, True
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}, False
+    if parsed is None:
+        return {}, True
+    if isinstance(parsed, dict):
+        return parsed, True
+    return {}, False
+
+
+def _map_finish_reason(raw: Any, *, has_tool_calls: bool) -> FinishReason:
+    if raw is None:
+        return FinishReason.TOOL_CALLS if has_tool_calls else FinishReason.STOP
+    value = str(raw).lower()
+    mapping = {
+        "stop": FinishReason.STOP,
+        "tool_calls": FinishReason.TOOL_CALLS,
+        "function_call": FinishReason.TOOL_CALLS,
+        "length": FinishReason.LENGTH,
+        "content_filter": FinishReason.CONTENT_FILTER,
+    }
+    if value in mapping:
+        return mapping[value]
+    if has_tool_calls:
+        return FinishReason.TOOL_CALLS
+    return FinishReason.UNKNOWN
 
 
 def _as_optional_int(value: Any) -> int | None:

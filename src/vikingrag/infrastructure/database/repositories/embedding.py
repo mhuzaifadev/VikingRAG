@@ -157,6 +157,7 @@ class SqlEmbeddingRepository:
         node_types: tuple[NodeType, ...] = (),
         representation_types: tuple[RepresentationType, ...] = (),
         min_score: float | None = None,
+        scope_node_id: NodeId | None = None,
     ) -> list[VectorSearchHit]:
         if len(query_embedding) != identity.dimensions:
             raise EmbeddingIdentityMismatch(
@@ -213,6 +214,9 @@ class SqlEmbeddingRepository:
                     [t.value for t in representation_types]
                 )
             )
+        if scope_node_id is not None:
+            # Subtree: node's path_ids contains the scope node (Postgres ARRAY @>).
+            stmt = stmt.where(DocumentNodeRow.path_ids.contains([UUID(str(scope_node_id))]))
         if min_score is not None:
             stmt = stmt.where(similarity_expr >= min_score)
 

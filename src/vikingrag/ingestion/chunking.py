@@ -48,42 +48,64 @@ class StructureAwareChunkingPolicy:
         for node in list(nodes):
             if node.node_type is NodeType.CHUNK:
                 continue
-            # Leaf structural region: has text and no structural children
-            structural_children = [
-                c
-                for c in children_by_parent.get(node.temp_id, [])
-                if c.node_type is not NodeType.CHUNK
-            ]
+            # Chunk direct body text even when the node also has structural children
+            # (paper: sections may own body text and child sections).
             text = (node.text or "").strip()
-            if not text or structural_children:
+            if not text:
                 continue
 
             pieces = self._split_text(text)
-            for ordinal, (piece, token_count) in enumerate(pieces):
+            # Ordinals must be unique among ALL siblings (structural + chunk).
+            sibling_ordinals = [c.ordinal for c in children_by_parent.get(node.temp_id, [])]
+            next_ordinal = (max(sibling_ordinals) + 1) if sibling_ordinals else 0
+            parent_temp_id = node.temp_id
+            parent_depth = node.depth
+            parent_title = node.title
+
+            def _emit(
+                piece_text: str,
+                token_count: int,
+                *,
+                _parent_temp_id: UUID = parent_temp_id,
+                _parent_depth: int = parent_depth,
+                _parent_title: str | None = parent_title,
+            ) -> None:
+                nonlocal next_ordinal
                 chunk_id = uuid4()
+                ordinal = next_ordinal
+                next_ordinal += 1
                 chunk_node = HierarchyDraftNode(
                     temp_id=chunk_id,
-                    parent_temp_id=node.temp_id,
+                    parent_temp_id=_parent_temp_id,
                     node_type=NodeType.CHUNK,
                     title=None,
                     ordinal=ordinal,
-                    depth=node.depth + 1,
-                    text=piece,
+                    depth=_parent_depth + 1,
+                    text=piece_text,
                     metadata={
-                        "parent_title": node.title,
+                        "parent_title": _parent_title,
                         "chunk_index": ordinal,
+                        "owns_parent_body": True,
                     },
                 )
                 nodes.append(chunk_node)
                 chunks.append(
                     ChunkDraft(
-                        parent_temp_id=node.temp_id,
+                        parent_temp_id=_parent_temp_id,
                         ordinal=ordinal,
-                        text=piece,
+                        text=piece_text,
                         token_count=token_count,
                         metadata=dict(chunk_node.metadata),
                     )
                 )
+
+            for piece, _token_count in pieces:
+                recounted = self._tokenizer.count(piece)
+                if recounted > self._config.max_tokens:
+                    for sub_piece, sub_count in self._window_split(piece):
+                        _emit(sub_piece, sub_count)
+                else:
+                    _emit(piece, recounted)
             # Structural node keeps title/metadata; body lives in chunks
             node.text = None
 

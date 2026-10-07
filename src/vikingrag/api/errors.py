@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from vikingrag.domain.errors import (
+    AuthenticationError,
     BudgetExhaustedError,
     ConflictError,
     DocumentAlreadyExists,
@@ -31,6 +32,14 @@ def _payload(exc: DomainError) -> dict[str, str]:
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(AuthenticationError)
+    async def authentication(_request: Request, exc: AuthenticationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=401,
+            content=_payload(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     @app.exception_handler(UnsupportedDocumentType)
     async def unsupported_type(_request: Request, exc: UnsupportedDocumentType) -> JSONResponse:
         return JSONResponse(status_code=415, content=_payload(exc))

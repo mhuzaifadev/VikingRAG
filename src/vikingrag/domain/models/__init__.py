@@ -1,3 +1,18 @@
+from vikingrag.domain.models.answer import (
+    AnswerCitation as AnswerCitation,
+)
+from vikingrag.domain.models.answer import (
+    AnswerRequest as AnswerRequest,
+)
+from vikingrag.domain.models.answer import (
+    AnswerResponse as AnswerResponse,
+)
+from vikingrag.domain.models.answer import (
+    AnswerStatus as AnswerStatus,
+)
+from vikingrag.domain.models.answer import (
+    ExecutionMode as ExecutionMode,
+)
 from vikingrag.domain.models.assessment import (
     AspectSupport,
     AspectSupportStatus,
@@ -16,6 +31,20 @@ from vikingrag.domain.models.document import (
     NodeType,
 )
 from vikingrag.domain.models.evidence import EvidenceBundle, ExclusionReason, RetrievedEvidence
+from vikingrag.domain.models.experience import (
+    ActivatedEdge,
+    EdgeBuildStatus,
+    ExpansionResult,
+    ExperienceEdge,
+    ExperienceEdgeStatus,
+    ExperienceExpansionLimits,
+    ExperiencePayload,
+    QueryRun,
+    QueryRunRoute,
+    QueryRunStatus,
+    RetrievalEvent,
+    RetrievalEventType,
+)
 from vikingrag.domain.models.node import DocumentNode, TreeNode
 from vikingrag.domain.models.primitives import (
     GrepMatch,
@@ -36,6 +65,11 @@ from vikingrag.domain.models.retrieval import (
 
 __all__ = [
     "AbstractStatus",
+    "ActivatedEdge",
+    "AnswerCitation",
+    "AnswerRequest",
+    "AnswerResponse",
+    "AnswerStatus",
     "AspectSupport",
     "AspectSupportStatus",
     "AssessmentStatus",
@@ -43,10 +77,17 @@ __all__ = [
     "DocumentId",
     "DocumentNode",
     "DocumentStatus",
+    "EdgeBuildStatus",
     "EvidenceAssessment",
     "EvidenceBundle",
     "EvidenceReference",
     "ExclusionReason",
+    "ExecutionMode",
+    "ExpansionResult",
+    "ExperienceEdge",
+    "ExperienceEdgeStatus",
+    "ExperienceExpansionLimits",
+    "ExperiencePayload",
     "GrepMatch",
     "GrepRequest",
     "GrepResponse",
@@ -57,10 +98,15 @@ __all__ = [
     "NodeId",
     "NodeType",
     "QueryAspect",
+    "QueryRun",
+    "QueryRunRoute",
+    "QueryRunStatus",
     "ReadRequest",
     "ReadResponse",
     "RetrievalBudget",
     "RetrievalCandidate",
+    "RetrievalEvent",
+    "RetrievalEventType",
     "RetrievalQuery",
     "RetrievalTrace",
     "RetrievedEvidence",

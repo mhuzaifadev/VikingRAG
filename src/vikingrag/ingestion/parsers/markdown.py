@@ -53,8 +53,27 @@ class MarkdownDocumentParser:
                 )
             buffer = []
 
+        in_fence = False
+        fence_marker = ""
         for line in lines:
-            match = _HEADING.match(line.rstrip("\n"))
+            stripped = line.rstrip("\n")
+            # Preserve fenced code: heading-like lines inside fences are body text
+            fence_open = re.match(r"^(```|~~~)(.*)$", stripped)
+            if fence_open:
+                marker = fence_open.group(1)
+                if not in_fence:
+                    in_fence = True
+                    fence_marker = marker
+                elif stripped.startswith(fence_marker):
+                    in_fence = False
+                    fence_marker = ""
+                if not buffer:
+                    buffer_start = offset
+                buffer.append(line)
+                offset += len(line)
+                continue
+
+            match = None if in_fence else _HEADING.match(stripped)
             if match:
                 flush_buffer()
                 level = len(match.group(1))

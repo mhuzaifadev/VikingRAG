@@ -36,7 +36,7 @@ services:
      - "9001:9001"
     volumes:
      - minio_data:/data
-    # MinIO is ready for an S3 adapter; the API currently uses LocalObjectStore.
+    # MinIO for S3-compatible adapter (VIKINGRAG_OBJECT_STORE_BACKEND=s3).
     # Official image lacks curl/mc by default - no healthcheck.
 
   api:

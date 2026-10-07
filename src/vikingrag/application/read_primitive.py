@@ -145,32 +145,68 @@ def _slice_by_tokens(
     max_tokens: int,
     tokenizer: Tokenizer,
 ) -> tuple[str, int, bool]:
-    """Return (text, end_offset, truncated) using tokenizer encode when available."""
+    """Return (text, end_offset, truncated) never exceeding max_tokens.
+
+    Uses encode→clip→decode when available, then recounts. Falls back to
+    code-point walking with tokenizer.count (no *4 char overshoot).
+    """
+    if max_tokens < 1:
+        raise ValidationDomainError("max_tokens must be >= 1")
     remainder = content[start_offset:]
     if not remainder:
         return "", start_offset, False
+
+    # Single code point that alone exceeds budget → explicit inability
+    first_cp = remainder[0]
+    if tokenizer.count(first_cp) > max_tokens:
+        raise ValidationDomainError(
+            "Single code point exceeds max_tokens; cannot return a conforming excerpt"
+        )
+
+    # Prefer encode/decode when reversible; always recount and fall back to
+    # code-point walk if the approximate tokenizer under-counts via encode.
     try:
         tokens = tokenizer.encode(remainder)
-        if len(tokens) <= max_tokens:
+        if len(tokens) <= max_tokens and tokenizer.count(remainder) <= max_tokens:
             return remainder, start_offset + len(remainder), False
-        clipped = tokenizer.decode(tokens[:max_tokens])
-        # decode may not map 1:1 to code points for approx tokenizer; fall back carefully
-        if not clipped:
-            # character fallback by ~4 chars/token
-            char_budget = max_tokens * 4
-            clipped = remainder[:char_budget]
-            return clipped, start_offset + len(clipped), True
-        # Find clipped as prefix of remainder (best effort)
-        if remainder.startswith(clipped):
-            end = start_offset + len(clipped)
-            return clipped, end, True
-        # If decode doesn't align, use char heuristic
-        char_budget = max_tokens * 4
-        clipped = remainder[:char_budget]
-        return clipped, start_offset + len(clipped), True
+        if len(tokens) > max_tokens:
+            n = max_tokens
+            while n > 0:
+                try:
+                    clipped = tokenizer.decode(tokens[:n])
+                except NotImplementedError:
+                    break
+                if not clipped:
+                    n -= 1
+                    continue
+                if not remainder.startswith(clipped):
+                    clipped = _longest_prefix_within_tokens(remainder, max_tokens, tokenizer)
+                if clipped and tokenizer.count(clipped) <= max_tokens:
+                    end = start_offset + len(clipped)
+                    return clipped, end, end < start_offset + len(remainder)
+                n -= 1
     except NotImplementedError:
-        char_budget = max_tokens * 4
-        if len(remainder) <= char_budget:
-            return remainder, start_offset + len(remainder), False
-        clipped = remainder[:char_budget]
-        return clipped, start_offset + len(clipped), True
+        pass
+
+    clipped = _longest_prefix_within_tokens(remainder, max_tokens, tokenizer)
+    end = start_offset + len(clipped)
+    return clipped, end, end < start_offset + len(remainder)
+
+
+def _longest_prefix_within_tokens(text: str, max_tokens: int, tokenizer: Tokenizer) -> str:
+    """Binary-search the longest unicode prefix whose token count <= max_tokens."""
+    if not text:
+        return ""
+    if tokenizer.count(text) <= max_tokens:
+        return text
+    lo, hi = 1, len(text)
+    best = ""
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = text[:mid]
+        if tokenizer.count(candidate) <= max_tokens:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best

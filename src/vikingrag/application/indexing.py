@@ -278,14 +278,14 @@ class DocumentIndexingService:
             child_summaries: list[str] = []
             for child in child_nodes:
                 if child.node_type is NodeType.CHUNK:
-                    # Prefer short content snippets for leaf children
+                    # Full owned chunk content (bounded later by summary max_input_tokens)
                     snippet = (child.content or child.title or "").strip()
                     if snippet:
-                        child_summaries.append(snippet[:240])
+                        child_summaries.append(snippet)
                 elif child.id in summary_text:
                     child_summaries.append(summary_text[child.id])
 
-            # Idempotency: reuse existing summary when inputs unchanged
+            # Idempotency: reuse when source fingerprint unchanged
             request = SummaryRequest(
                 node_id=node.id,
                 node_type=node.node_type,
@@ -295,7 +295,7 @@ class DocumentIndexingService:
                 max_input_tokens=self._indexing.summary_max_input_tokens,
                 max_output_tokens=self._indexing.summary_max_output_tokens,
             )
-            input_fingerprint = _summary_fingerprint(request)
+            source_fingerprint = hash_text(_summary_fingerprint(request))
 
             async with self._database.session() as session:
                 reps_repo = SqlRepresentationRepository(session)
@@ -303,7 +303,7 @@ class DocumentIndexingService:
                 if (
                     existing is not None
                     and not force
-                    and existing.content_hash == hash_text(input_fingerprint)
+                    and existing.metadata.get("source_fingerprint") == source_fingerprint
                     and existing.generator == self._summaries.name
                     and existing.generator_model == self._summaries.model
                     and existing.version == self._summaries.version
@@ -331,7 +331,7 @@ class DocumentIndexingService:
                 force=True,
                 metrics=metrics,
                 is_summary=True,
-                content_hash_override=hash_text(input_fingerprint),
+                source_fingerprint=source_fingerprint,
             )
             summary_text[node.id] = result.text
             metrics.summaries_generated += 1
@@ -364,8 +364,13 @@ class DocumentIndexingService:
         metrics: IndexingMetrics,
         is_summary: bool,
         content_hash_override: str | None = None,
+        source_fingerprint: str | None = None,
     ) -> NodeRepresentation:
+        # content_hash always reflects output text; source_fingerprint is separate
         content_hash = content_hash_override or hash_text(content)
+        meta: dict[str, object] = {}
+        if source_fingerprint is not None:
+            meta["source_fingerprint"] = source_fingerprint
         async with self._database.session() as session:
             reps = SqlRepresentationRepository(session)
             nodes = SqlNodeRepository(session)
@@ -374,6 +379,10 @@ class DocumentIndexingService:
                 existing is not None
                 and not force
                 and existing.content_hash == content_hash
+                and (
+                    source_fingerprint is None
+                    or existing.metadata.get("source_fingerprint") == source_fingerprint
+                )
                 and existing.generator == generator
                 and existing.generator_model == generator_model
                 and existing.version == version
@@ -392,7 +401,7 @@ class DocumentIndexingService:
                 generator=generator,
                 generator_model=generator_model,
                 version=version,
-                metadata={},
+                metadata=meta,
             )
             saved = await reps.upsert(representation)
             if is_summary:

@@ -1,19 +1,19 @@
 repos:
- - repo: https://github.com/astral-sh/ruff-pre-commit
+  - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.8.6
     hooks:
-     - id: ruff
+      - id: ruff
         args: [--fix]
-     - id: ruff-format
+      - id: ruff-format
 
- - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.14.1
+  # Use the project venv (same as `make typecheck`). The mirrors-mypy hook
+  # runs in an isolated env and misses fastapi/uvicorn/etc.
+  - repo: local
     hooks:
-     - id: mypy
-        additional_dependencies:
-         - pydantic>=2.9
-         - pydantic-settings>=2.6
-         - sqlalchemy[asyncio]>=2.0
-         - types-redis
-        args: [--config-file=pyproject.toml]
+      - id: mypy
+        name: mypy
+        entry: uv run mypy src
+        language: system
+        types: [python]
         pass_filenames: false
+        require_serial: true

@@ -1,4 +1,4 @@
-.PHONY: install dev lint typecheck test test-unit test-integration migrate docker-up docker-down pre-commit index
+.PHONY: install dev lint typecheck test test-unit test-integration test-eval migrate docker-up docker-down docker-reset pre-commit index
 
 UV ?= uv
 
@@ -19,18 +19,24 @@ typecheck:
 test: test-unit
 
 test-unit:
-	$(UV) run pytest tests/unit -q
+	$(UV) run pytest tests/unit tests/evaluation -q
 
 test-integration:
 	$(UV) run pytest tests/integration -q -m integration
 
+test-eval:
+	$(UV) run vikingrag-eval smoke --offline
+
 migrate:
-	$(UV) run alembic upgrade head
+	$(UV) run vikingrag-migrate upgrade head
 
 docker-up:
 	docker compose up -d --build
 
 docker-down:
+	docker compose down
+
+docker-reset:
 	docker compose down -v
 
 pre-commit:

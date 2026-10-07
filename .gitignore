@@ -27,11 +27,16 @@ dmypy.json
 data/
 *.db
 
-# Internal architecture notes stay local; ship public retrieval docs + ADRs
-docs/*
-!docs/RETRIEVAL.md
-!docs/ADR/
-!docs/ADR/**/*.md
+# Keep large/binary paper PDFs local; ship architecture and operational docs
+docs/*.pdf
+docs/**/*.pdf
+
+# Internal planning / completion specs — do not publish with the product docs
+docs/*-completion-spec.md
+docs/*-spec.md
+docs/plans/
+.cursor/plans/
+*.plan.md
 
 # Editor / agent tooling (local)
 .cursor/

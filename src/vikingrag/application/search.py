@@ -6,7 +6,9 @@ import time
 from uuid import uuid4
 
 from vikingrag.application.budget import RetrievalContext
-from vikingrag.domain.models.document import NodeType
+from vikingrag.application.navigation import StructuralNavigationService
+from vikingrag.domain.errors import ScopeDeniedError
+from vikingrag.domain.models.document import NodeId, NodeType
 from vikingrag.domain.models.representation import (
     EmbeddingIdentity,
     SearchHit,
@@ -17,7 +19,9 @@ from vikingrag.domain.models.representation import (
 )
 from vikingrag.domain.models.retrieval import RetrievalBudget, RetrievalTrace
 from vikingrag.infrastructure.database.engine import Database
+from vikingrag.infrastructure.database.repositories.document import SqlDocumentRepository
 from vikingrag.infrastructure.database.repositories.embedding import SqlEmbeddingRepository
+from vikingrag.infrastructure.database.repositories.node import SqlNodeRepository
 from vikingrag.observability.logging import get_logger
 from vikingrag.providers.embeddings.base import EmbeddingProvider
 from vikingrag.providers.reranking.base import RerankerProvider
@@ -80,13 +84,31 @@ class SemanticSearchService:
             request.min_score if request.min_score is not None else self._retrieval.min_score
         )
 
-        # Scope: client document_ids narrow permitted set (never widen)
+        # Scope: empty permit set = deny-all (raise before embed/SQL).
+        # None = unrestricted; nonempty = SQL filter to those docs.
+        context.require_scope_not_empty()
         scoped_docs = context.narrow_document_ids(list(request.document_ids))
-        if request.document_ids and not scoped_docs:
-            scoped_docs = ()  # narrow_document_ids raises if permitted nonempty mismatch
 
         async with context.tool_call("search"):
             context.check_deadline()
+            scope_node_id: NodeId | None = None
+            if request.scope_uri is not None:
+                async with self._database.session() as session:
+                    await context.reserve(db_operations=1)
+                    nav = StructuralNavigationService(
+                        documents=SqlDocumentRepository(session),
+                        nodes=SqlNodeRepository(session),
+                    )
+                    scope_node = await nav.resolve_uri(request.scope_uri.strip())
+                    if not context.document_allowed(scope_node.document_id):
+                        raise ScopeDeniedError(
+                            f"scope_uri document {scope_node.document_id} outside permitted scope"
+                        )
+                    scope_node_id = scope_node.id
+                    # When client sent no document_ids, restrict SQL to the scope's document.
+                    if not scoped_docs:
+                        scoped_docs = context.narrow_document_ids((scope_node.document_id,))
+
             cache_key = (request.query, identity.key())
             cached = context.get_cached_query_embedding(cache_key)
             embed_started = time.perf_counter()
@@ -96,7 +118,9 @@ class SemanticSearchService:
                 embedding_calls = 0
             else:
                 await context.reserve(embedding_calls=1)
-                embedded = await self._embeddings.embed_text(request.query)
+                embedded = await context.await_with_deadline(
+                    self._embeddings.embed_text(request.query)
+                )
                 query_vector = embedded.vectors[0]
                 context.cache_query_embedding(cache_key, query_vector)
                 embedding_ms = (time.perf_counter() - embed_started) * 1000.0
@@ -104,21 +128,25 @@ class SemanticSearchService:
 
             await context.reserve(vector_searches=1, db_operations=1)
             vector_started = time.perf_counter()
+            # When unrestricted and client sent no ids, pass empty → no SQL doc filter.
+            # When permitted set exists, scoped_docs is always nonempty (or raised).
+            sql_doc_ids = scoped_docs if scoped_docs else ()
             async with self._database.session() as session:
                 repo = SqlEmbeddingRepository(session)
                 raw_hits = await repo.search_cosine(
                     query_vector,
                     identity=identity,
                     top_k=pool,
-                    document_ids=scoped_docs if scoped_docs else request.document_ids,
+                    document_ids=sql_doc_ids,
                     node_types=request.node_types,
                     representation_types=request.representation_types,
                     min_score=min_score,
+                    scope_node_id=scope_node_id,
                 )
             vector_ms = (time.perf_counter() - vector_started) * 1000.0
             await context.add_usage(nodes_inspected=len(raw_hits))
 
-            # Drop hits outside permitted scope (defense in depth)
+            # Defense in depth
             if context.permitted_document_ids is not None:
                 raw_hits = [h for h in raw_hits if h.document_id in context.permitted_document_ids]
 
@@ -151,7 +179,11 @@ class SemanticSearchService:
             rerank_ms = 0.0
             reranked = False
             rerank_calls = 0
-            if self._rerank_enabled and scored:
+            # Only claim reranked when a non-NoOp reranker actually ran
+            from vikingrag.providers.reranking.noop import NoOpReranker as _NoOp
+
+            real_rerank = self._rerank_enabled and not isinstance(self._reranker, _NoOp)
+            if real_rerank and scored:
                 rerank_started = time.perf_counter()
                 docs = [f"{h.title or ''}\n{h.preview}" for h in scored]
                 rerank_hits = await self._reranker.rerank(request.query, docs, top_n=top_k)

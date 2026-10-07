@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
 from vikingrag.domain.errors import BudgetExhaustedError, DomainError, ScopeDeniedError
 from vikingrag.domain.models.document import DocumentId
 from vikingrag.domain.models.retrieval import RetrievalBudget
+
+T = TypeVar("T")
 
 
 class CancellationError(DomainError):
@@ -30,6 +32,8 @@ class BudgetLimits:
     max_llm_calls: int = 4
     max_nodes_inspected: int = 200
     max_db_operations: int = 200
+    max_provider_attempts: int = 40
+    max_evidence_tokens_retained: int = 50_000
     max_estimated_cost_usd: float | None = None
 
     @classmethod
@@ -41,6 +45,35 @@ class BudgetLimits:
             max_embedding_calls=budget.max_embedding_calls,
             max_vector_searches=budget.max_vector_searches,
             max_estimated_cost_usd=budget.max_estimated_cost_usd,
+        )
+
+    @classmethod
+    def paper_profile(
+        cls,
+        *,
+        agent_round_budget: int = 15,
+        top_k: int = 10,
+        chunk_token_upper_bound: int = 1000,
+        activation_gamma: float = 0.8,
+    ) -> BudgetLimits:
+        """Paper evaluation defaults: K=10, L=1000, B=15, gamma=0.8 -> tool/call budgets.
+
+        ``activation_gamma`` is recorded for Search+/experience wiring; it does not
+        alter numeric budget caps directly.
+        """
+        del top_k, chunk_token_upper_bound, activation_gamma
+        # B rounds → generous tool + LLM headroom (multiple tools per round)
+        rounds = max(1, agent_round_budget)
+        return cls(
+            max_tool_calls=max(60, rounds * 4),
+            max_read_tokens=100_000,
+            max_wall_time_ms=300_000,
+            max_embedding_calls=max(40, rounds * 2),
+            max_vector_searches=max(40, rounds * 2),
+            max_llm_calls=max(20, rounds + 5),
+            max_nodes_inspected=2_000,
+            max_db_operations=2_000,
+            max_provider_attempts=max(80, rounds * 5),
         )
 
 
@@ -107,14 +140,21 @@ class RetrievalContext:
             resolved = BudgetLimits.from_retrieval_budget(budget)
         if resolved is None:
             resolved = BudgetLimits()
-        ctx = cls(
+        return cls(
             query_id=query_id or uuid4(),
             trace_id=trace_id or str(uuid4()),
             permitted_document_ids=permitted_document_ids,
             limits=resolved,
             deadline_monotonic=time.monotonic() + (resolved.max_wall_time_ms / 1000.0),
         )
-        return ctx
+
+    @property
+    def is_unrestricted(self) -> bool:
+        return self.permitted_document_ids is None
+
+    @property
+    def is_deny_all(self) -> bool:
+        return self.permitted_document_ids is not None and len(self.permitted_document_ids) == 0
 
     def check_cancelled(self) -> None:
         if self.cancel_event.is_set():
@@ -128,15 +168,29 @@ class RetrievalContext:
     def remaining_ms(self) -> float:
         return max(0.0, (self.deadline_monotonic - time.monotonic()) * 1000.0)
 
+    def remaining_seconds(self) -> float:
+        return self.remaining_ms() / 1000.0
+
     def document_allowed(self, document_id: DocumentId) -> bool:
         if self.permitted_document_ids is None:
             return True
         return document_id in self.permitted_document_ids
 
+    def require_scope_not_empty(self) -> None:
+        """Raise before any embed/SQL when allowlist is explicitly empty."""
+        if self.is_deny_all:
+            raise ScopeDeniedError("No documents permitted in retrieval scope")
+
     def narrow_document_ids(
         self, requested: tuple[DocumentId, ...] | list[DocumentId]
     ) -> tuple[DocumentId, ...]:
-        """Client may narrow scope, never widen past permitted set."""
+        """Client may narrow scope, never widen past permitted set.
+
+        Returns () only when unrestricted and client requested nothing.
+        Empty permitted set raises ScopeDeniedError (allow-nothing).
+        """
+        if self.is_deny_all:
+            raise ScopeDeniedError("No documents permitted in retrieval scope")
         if not requested:
             if self.permitted_document_ids is None:
                 return ()
@@ -154,33 +208,51 @@ class RetrievalContext:
     def get_cached_query_embedding(self, key: tuple[str, str]) -> list[float] | None:
         return self._query_embedding_cache.get(key)
 
+    def _check_amount(self, name: str, current: int, amount: int) -> None:
+        if amount < 0:
+            raise ValueError(f"amount for {name} must be >= 0")
+        limit_name = f"max_{name}"
+        if not hasattr(self.limits, limit_name):
+            return
+        limit = getattr(self.limits, limit_name)
+        if limit is None:
+            return
+        if current + amount > limit:
+            raise BudgetExhaustedError(name)
+
     async def reserve(self, **amounts: int) -> None:
-        """Atomically reserve budget capacity before an external/db call."""
+        """Validate all deltas first, then commit (no partial mutation on failure)."""
         async with self._lock:
             self.check_deadline()
             for name, amount in amounts.items():
-                if amount < 0:
-                    raise ValueError(f"reserve amount for {name} must be >= 0")
                 current = getattr(self.usage, name)
-                limit_name = f"max_{name}"
-                if not hasattr(self.limits, limit_name):
-                    # fields without max_* still tracked but not capped here
-                    setattr(self.usage, name, current + amount)
-                    continue
-                limit = getattr(self.limits, limit_name)
-                if current + amount > limit:
-                    raise BudgetExhaustedError(name)
-                setattr(self.usage, name, current + amount)
+                self._check_amount(name, current, amount)
+            for name, amount in amounts.items():
+                setattr(self.usage, name, getattr(self.usage, name) + amount)
 
     async def add_usage(self, **amounts: int) -> None:
-        """Reconcile additional usage that does not need pre-reservation."""
+        """Reconcile additional usage; enforces the same caps as reserve."""
         async with self._lock:
             for name, amount in amounts.items():
                 if amount == 0:
                     continue
-                if amount < 0:
-                    raise ValueError("usage increments must be >= 0")
+                current = getattr(self.usage, name)
+                self._check_amount(name, current, amount)
+            for name, amount in amounts.items():
+                if amount == 0:
+                    continue
                 setattr(self.usage, name, getattr(self.usage, name) + amount)
+
+    async def await_with_deadline(self, awaitable: Awaitable[T]) -> T:
+        """Await work bounded by remaining wall-clock budget."""
+        self.check_deadline()
+        remaining = self.remaining_seconds()
+        if remaining <= 0:
+            raise BudgetExhaustedError("wall_time")
+        try:
+            return await asyncio.wait_for(awaitable, timeout=remaining)
+        except TimeoutError as exc:
+            raise BudgetExhaustedError("wall_time") from exc
 
     @asynccontextmanager
     async def tool_call(self, name: str = "tool") -> AsyncIterator[None]:

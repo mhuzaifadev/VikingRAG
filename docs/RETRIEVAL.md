@@ -74,7 +74,7 @@ One `RetrievalContext` per request tracks tool calls, embeddings, vector searche
 
 ## Scope / auth limitation
 
-`document_ids` and `permitted_document_ids` filter content. This is **not** multitenant authentication. Until auth lands, treat the API as trusted-network.
+`document_ids` and `permitted_document_ids` filter content. Single-tenant API-key auth (`VIKINGRAG_AUTH_*`) derives server-side `permitted_document_ids`. This is **not** multitenant authentication.
 
 ## Grep offsets
 

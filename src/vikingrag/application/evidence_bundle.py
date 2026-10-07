@@ -97,55 +97,79 @@ def assemble_evidence_bundle(
             )
             continue
 
+        # Retain uncovered tails when new interval partially overlaps existing ones
+        pieces: list[tuple[int, int, str, int]]
         if item.node_id is not None:
             intervals = node_intervals.setdefault(item.node_id, [])
-            if _overlaps(intervals, item.start_offset, item.end_offset):
+            pieces = _uncovered_segments(
+                item.start_offset,
+                item.end_offset,
+                item.text,
+                item.token_count,
+                intervals,
+            )
+            if not pieces:
                 excluded.append(
                     ExcludedEvidence(
                         uri=item.uri,
                         reason=ExclusionReason.OVERLAP_COLLAPSED,
-                        detail="overlapping excerpt on same node",
+                        detail="fully covered by existing intervals on same node",
                     )
                 )
                 continue
+        else:
+            pieces = [(item.start_offset, item.end_offset, item.text, item.token_count)]
 
-        if total + item.token_count > max_tokens:
-            excluded.append(
-                ExcludedEvidence(
-                    uri=item.uri,
-                    reason=ExclusionReason.BUNDLE_TOKEN_LIMIT,
-                    detail=f"would exceed max_tokens={max_tokens}",
+        for seg_start, seg_end, seg_text, seg_tokens in pieces:
+            if total + seg_tokens > max_tokens:
+                excluded.append(
+                    ExcludedEvidence(
+                        uri=item.uri,
+                        reason=ExclusionReason.BUNDLE_TOKEN_LIMIT,
+                        detail=f"would exceed max_tokens={max_tokens}",
+                    )
+                )
+                truncated = True
+                continue
+
+            eid = item.evidence_id or evidence_id_for(next_id)
+            next_id += 1
+            if len(pieces) > 1 or (seg_start, seg_end) != (item.start_offset, item.end_offset):
+                eid = f"{eid}_t{seg_start}"
+            normalized = RetrievedEvidence(
+                evidence_id=eid,
+                uri=item.uri,
+                text=seg_text,
+                token_count=seg_tokens,
+                document_id=item.document_id,
+                node_id=item.node_id,
+                chunk_id=item.chunk_id,
+                content_hash=item.content_hash,
+                start_offset=seg_start,
+                end_offset=seg_end,
+                offset_system=item.offset_system or OffsetSystem.UNICODE_CODE_POINT,
+                discovery_score=item.discovery_score
+                if item.discovery_score is not None
+                else item.score,
+                score=item.score,
+                provenance=item.provenance,
+                metadata={**dict(item.metadata), "overlap_tail": True}
+                if (seg_start, seg_end) != (item.start_offset, item.end_offset)
+                else dict(item.metadata),
+            )
+            accepted.append(normalized)
+            seen_ranges.add(
+                (
+                    item.document_id,
+                    item.node_id,
+                    item.content_hash,
+                    seg_start,
+                    seg_end,
                 )
             )
-            truncated = True
-            continue
-
-        eid = item.evidence_id or evidence_id_for(next_id)
-        next_id += 1
-        normalized = RetrievedEvidence(
-            evidence_id=eid,
-            uri=item.uri,
-            text=item.text,
-            token_count=item.token_count,
-            document_id=item.document_id,
-            node_id=item.node_id,
-            chunk_id=item.chunk_id,
-            content_hash=item.content_hash,
-            start_offset=item.start_offset,
-            end_offset=item.end_offset,
-            offset_system=item.offset_system or OffsetSystem.UNICODE_CODE_POINT,
-            discovery_score=item.discovery_score
-            if item.discovery_score is not None
-            else item.score,
-            score=item.score,
-            provenance=item.provenance,
-            metadata=dict(item.metadata),
-        )
-        accepted.append(normalized)
-        seen_ranges.add(key)
-        if item.node_id is not None:
-            node_intervals.setdefault(item.node_id, []).append((item.start_offset, item.end_offset))
-        total += item.token_count
+            if item.node_id is not None:
+                node_intervals.setdefault(item.node_id, []).append((seg_start, seg_end))
+            total += seg_tokens
 
     return EvidenceBundle.from_items(
         accepted,
@@ -157,3 +181,43 @@ def assemble_evidence_bundle(
 
 def _overlaps(intervals: list[tuple[int, int]], start: int, end: int) -> bool:
     return any(start < b and end > a for a, b in intervals)
+
+
+def _uncovered_segments(
+    start: int,
+    end: int,
+    text: str,
+    token_count: int,
+    intervals: list[tuple[int, int]],
+) -> list[tuple[int, int, str, int]]:
+    """Return disjoint sub-ranges of [start,end) not covered by existing intervals.
+
+    Text is sliced by unicode offsets relative to the original evidence span.
+    Token counts stay exact when unsplit; proportional when split.
+    """
+    span = max(1, end - start)
+    if not _overlaps(intervals, start, end):
+        return [(start, end, text, token_count)]
+
+    covered = sorted(intervals)
+    cursor = start
+    out: list[tuple[int, int, str, int]] = []
+    for a, b in covered:
+        if b <= cursor:
+            continue
+        if a > cursor:
+            seg_start, seg_end = cursor, min(a, end)
+            if seg_start < seg_end:
+                local = text[seg_start - start : seg_end - start]
+                tokens = (
+                    max(1, (token_count * (seg_end - seg_start)) // span) if local.strip() else 0
+                )
+                out.append((seg_start, seg_end, local, tokens))
+        cursor = max(cursor, b)
+        if cursor >= end:
+            break
+    if cursor < end:
+        local = text[cursor - start : end - start]
+        tokens = max(1, (token_count * (end - cursor)) // span) if local.strip() else 0
+        out.append((cursor, end, local, tokens))
+    return out

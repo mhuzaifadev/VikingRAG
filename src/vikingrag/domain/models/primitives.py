@@ -58,6 +58,7 @@ class GrepRequest:
     max_matches: int = 20
     max_descendants: int = 500
     cursor: str | None = None
+    mode: str = "literal"  # literal | pattern
 
     def __post_init__(self) -> None:
         if not self.uri.strip():
@@ -68,6 +69,8 @@ class GrepRequest:
             raise ValueError("GrepRequest.max_matches must be >= 1")
         if self.max_descendants < 1:
             raise ValueError("GrepRequest.max_descendants must be >= 1")
+        if self.mode not in ("literal", "pattern"):
+            raise ValueError("GrepRequest.mode must be 'literal' or 'pattern'")
 
 
 @dataclass(frozen=True, slots=True)

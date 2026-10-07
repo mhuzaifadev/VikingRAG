@@ -114,6 +114,11 @@ class ScopeDeniedError(ValidationDomainError):
         DomainError.__init__(self, message, code="scope_denied")
 
 
+class AuthenticationError(DomainError):
+    def __init__(self, message: str = "Authentication required") -> None:
+        super().__init__(message, code="authentication_error")
+
+
 class AssessmentValidationError(DomainError):
     def __init__(self, message: str) -> None:
         super().__init__(message, code="assessment_validation_error")

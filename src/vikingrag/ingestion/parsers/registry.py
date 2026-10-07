@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from vikingrag.domain.errors import UnsupportedDocumentType
 from vikingrag.ingestion.parsers.base import DocumentParser
+from vikingrag.ingestion.parsers.docx import DocxDocumentParser
 from vikingrag.ingestion.parsers.markdown import MarkdownDocumentParser
 from vikingrag.ingestion.parsers.pdf import PdfDocumentParser
 from vikingrag.ingestion.parsers.text import TextDocumentParser
@@ -26,6 +27,7 @@ def build_default_parser_registry() -> ParserRegistry:
     return ParserRegistry(
         [
             MarkdownDocumentParser(),
+            DocxDocumentParser(),
             TextDocumentParser(),
             PdfDocumentParser(),
         ]

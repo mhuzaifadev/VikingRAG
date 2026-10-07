@@ -3,22 +3,40 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from typing import Any
 
 from vikingrag.domain.models.representation import SummaryRequest, SummaryResult
-from vikingrag.providers.llm.base import ChatMessage, LLMResponse
+from vikingrag.providers.llm.base import (
+    ChatMessage,
+    FinishReason,
+    LLMResponse,
+    TokenUsage,
+    ToolCall,
+    ToolDefinition,
+)
 
 
 class FakeLLMProvider:
-    """Returns a deterministic string derived from the last user message."""
+    """Returns deterministic content or a scripted sequence of tool/answer steps."""
 
-    def __init__(self, *, model: str = "fake-llm-v1") -> None:
+    def __init__(
+        self,
+        *,
+        model: str = "fake-llm-v1",
+        script: Sequence[LLMResponse] | None = None,
+    ) -> None:
         self._model = model
-        self.calls: list[list[ChatMessage]] = []
+        self._script = list(script) if script is not None else None
+        self._script_index = 0
+        self.calls: list[dict[str, Any]] = []
 
     @property
     def model(self) -> str:
         return self._model
+
+    async def aclose(self) -> None:
+        return None
 
     async def generate(
         self,
@@ -28,17 +46,100 @@ class FakeLLMProvider:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_schema: dict[str, Any] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
-        del temperature, max_tokens, response_schema
-        self.calls.append(list(messages))
-        last = messages[-1].content if messages else ""
+        self.calls.append(
+            {
+                "messages": list(messages),
+                "tools": list(tools) if tools else None,
+                "tool_choice": tool_choice,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "response_schema": response_schema,
+            }
+        )
+        if self._script is not None:
+            if self._script_index >= len(self._script):
+                # Exhausted script: stop with empty answer
+                return LLMResponse(
+                    content="",
+                    model=model or self._model,
+                    finish_reason=FinishReason.STOP,
+                    usage=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+                    input_tokens=1,
+                    output_tokens=1,
+                )
+            response = self._script[self._script_index]
+            self._script_index += 1
+            return response
+
+        last = ""
+        for msg in reversed(messages):
+            if msg.content:
+                last = msg.content
+                break
         content = f"SUMMARY: {last[:400]}"
         return LLMResponse(
             content=content,
             model=model or self._model,
-            input_tokens=max(1, len(last.split())),
+            finish_reason=FinishReason.STOP,
+            usage=TokenUsage(
+                input_tokens=max(1, len(last.split()) if last else 1),
+                output_tokens=max(1, len(content.split())),
+            ),
+            input_tokens=max(1, len(last.split()) if last else 1),
             output_tokens=max(1, len(content.split())),
         )
+
+
+def scripted_tool_call(
+    *,
+    call_id: str,
+    name: str,
+    arguments: dict[str, Any],
+    model: str = "fake-llm-v1",
+) -> LLMResponse:
+    """Helper to build a tool-calling LLMResponse for FakeLLMProvider scripts."""
+    import json
+
+    raw = json.dumps(arguments, separators=(",", ":"))
+    return LLMResponse(
+        content=None,
+        model=model,
+        finish_reason=FinishReason.TOOL_CALLS,
+        tool_calls=(
+            ToolCall(
+                id=call_id,
+                name=name,
+                arguments=arguments,
+                arguments_raw=raw,
+                arguments_valid=True,
+            ),
+        ),
+        usage=TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        input_tokens=10,
+        output_tokens=5,
+    )
+
+
+def scripted_final_answer(
+    content: str,
+    *,
+    model: str = "fake-llm-v1",
+) -> LLMResponse:
+    return LLMResponse(
+        content=content,
+        model=model,
+        finish_reason=FinishReason.STOP,
+        usage=TokenUsage(
+            input_tokens=20,
+            output_tokens=max(1, len(content.split())),
+            total_tokens=20 + max(1, len(content.split())),
+        ),
+        input_tokens=20,
+        output_tokens=max(1, len(content.split())),
+    )
 
 
 class FakeSummaryGenerator:
@@ -73,7 +174,6 @@ class FakeSummaryGenerator:
             if child.strip():
                 parts.append(f"- {child.strip()[:240]}")
         text = " | ".join(parts) if parts else f"Empty {request.node_type.value}"
-        # Keep within a compact budget
         if len(text) > 800:
             text = text[:797] + "..."
         latency_ms = (time.perf_counter() - started) * 1000.0
@@ -134,8 +234,9 @@ class LLMSummaryGenerator:
             temperature=self._temperature,
             max_tokens=request.max_output_tokens,
         )
+        text = (response.content or "").strip()
         return SummaryResult(
-            text=response.content.strip(),
+            text=text,
             model=response.model,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,

@@ -131,6 +131,9 @@ class SearchRequest:
     representation_types: tuple[RepresentationType, ...] = ()
     min_score: float | None = None
     candidate_pool_size: int | None = None
+    # Paper sec 3.1-3.2: optional directory URI scoping semantic search to a subtree.
+    # None = unrestricted (legacy behavior).
+    scope_uri: str | None = None
 
     def __post_init__(self) -> None:
         if not self.query.strip():
@@ -139,6 +142,8 @@ class SearchRequest:
             raise ValueError("SearchRequest.top_k must be >= 1")
         if self.min_score is not None and not (0.0 <= self.min_score <= 1.0):
             raise ValueError("SearchRequest.min_score must be in [0, 1]")
+        if self.scope_uri is not None and not self.scope_uri.strip():
+            raise ValueError("SearchRequest.scope_uri must be non-empty when set")
 
 
 @dataclass(frozen=True, slots=True)

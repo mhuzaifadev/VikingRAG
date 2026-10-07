@@ -90,6 +90,10 @@ class SearchRequestBody(BaseModel):
     representation_types: list[RepresentationType] = Field(default_factory=list)
     min_score: float | None = Field(default=None, ge=0.0, le=1.0)
     candidate_pool_size: int | None = Field(default=None, ge=1, le=200)
+    scope_uri: str | None = Field(
+        default=None,
+        description="Optional directory URI; Search restricted to that subtree",
+    )
 
 
 class SearchHitResponse(BaseModel):

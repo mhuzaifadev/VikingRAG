@@ -43,6 +43,9 @@ class DeterministicEmbeddingProvider:
     def dimensions(self) -> int:
         return self._dimensions
 
+    async def aclose(self) -> None:
+        return None
+
     async def embed_text(self, text: str, *, model: str | None = None) -> EmbeddingResult:
         return await self.embed([text], model=model)
 
