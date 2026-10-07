@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/mhuzaifadev/VikingRAG">
-    <img src="https://img.shields.io/badge/VikingRAG-0.4.0-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.4.0" />
+    <img src="https://img.shields.io/badge/VikingRAG-0.4.1-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.4.1" />
   </a>
 </p>
 
@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.4.0"><img src="https://img.shields.io/badge/release-v0.4.0-blue?logo=github" alt="Release v0.4.0" /></a>
+  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.4.1"><img src="https://img.shields.io/badge/release-v0.4.1-blue?logo=github" alt="Release v0.4.1" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?logo=apache" alt="Apache 2.0" /></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+" /></a>
   <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white" alt="FastAPI" /></a>
@@ -89,11 +89,7 @@ This project turns those ideas into a production-ready stack:
 
 > **Independent implementation** inspired by the paper - not a fork of the AGPL research artifacts.
 
-### Comparison visuals
-
-Drop charts into [`docs/assets/`](docs/assets/) (see that folder’s README), then uncomment:
-
-<!--
+<!-- Optional: add comparison-tokens.png / comparison-accuracy.png under docs/assets/ then uncomment
 <p align="center">
   <img src="docs/assets/comparison-tokens.png" alt="Token cost vs baselines" width="720" />
 </p>
@@ -101,8 +97,6 @@ Drop charts into [`docs/assets/`](docs/assets/) (see that folder’s README), th
   <img src="docs/assets/comparison-accuracy.png" alt="Accuracy vs baselines" width="720" />
 </p>
 -->
-
-Best place for side-by-side paper-style figures is **right here** (under Why), or a short **Results** section after Features. Use only real measurements or clearly cited paper figures — never invent scores.
 
 ---
 
@@ -150,7 +144,7 @@ make install && make docker-up && make migrate && make dev
 ### Option C — pip from GitHub (pre-release / specific tag)
 
 ```bash
-pip install "git+https://github.com/mhuzaifadev/VikingRAG.git@v0.4.0"
+pip install "git+https://github.com/mhuzaifadev/VikingRAG.git@v0.4.1"
 ```
 
 ### Option D — Docker Compose
@@ -314,64 +308,35 @@ curl -s -X POST "http://localhost:8000/v1/documents/${DOC_ID}/index" \
 curl -s -X POST http://localhost:8000/v1/search \
   -H "Content-Type: application/json" \
   -d '{"query":"How do we verify retrieved evidence?","top_k":5}' | jq
+
+curl -s -X POST http://localhost:8000/v1/answers \
+  -H "Content-Type: application/json" \
+  -d "{\"query\":\"How do we verify retrieved evidence?\",\"document_ids\":[\"${DOC_ID}\"],\"execution_mode\":\"vikingrag\"}" | jq
 ```
 
-Interactive API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-
----
-
-## Verify before go-live
-
-`0.4.0` is an **algorithm-complete milestone**, not “I ran paper Tables 3–5.” Use this ladder:
-
-```bash
-# 1) Offline gates (always)
-make install && make lint && make typecheck && make test
-uv run vikingrag-eval smoke --offline
-
-# 2) Integration (Postgres + Redis)
-make docker-up && make migrate && make test-integration
-
-# 3) Local API with fake/deterministic providers (wiring only)
-make dev
-# then ingest → index → search → POST /v1/answers (see Quick start)
-
-# 4) Production-shaped stack with real providers + auth
-#    (see docs/OPERATIONS.md — rejects fake/scripted/deterministic)
-docker compose -f docker-compose.prod.yml up -d --build
-```
-
-Full checklist and result meanings: [`docs/OPERATIONS.md`](docs/OPERATIONS.md#pre-live-checklist).
-
-**What counts as a result today**
-
-| Output | How | Claims |
-|---|---|---|
-| Unit / lint / mypy | `make test` etc. | Code quality |
-| Offline eval smoke JSON | `vikingrag-eval smoke --offline` | Fixture integrity only (`measured_scores: null`) |
-| Integration pass | `make test-integration` | DB/migrate/API contracts |
-| Paper accuracy/token tables | Paid corpora + real LLM runs | **BLOCKED** until you run them — never invent |
+Interactive API docs: [http://localhost:8000/docs](http://localhost:8000/docs) · Ops: [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
 
 ---
 
 ## SDK
 
-Embed VikingRAG in your process (same settings / providers as the API):
-
 ```python
+import asyncio
 from vikingrag import VikingRAGClient
 
-client = VikingRAGClient.from_settings()
-# await client.search.search(...)
-# await client.answer_generator().generate(...)
-# await client.aclose()
+async def main() -> None:
+    client = VikingRAGClient.from_settings()
+    try:
+        # hits = await client.search.search(...)
+        # answer = await client.answer_generator().generate(...)
+        pass
+    finally:
+        await client.aclose()
+
+asyncio.run(main())
 ```
 
-Providers via env: `VIKINGRAG_LLM_PROVIDER=openai|deepseek|gemini|anthropic|vllm` (and matching embeddings). Production forbids `fake` / `deterministic` / `scripted`.
-
-```bash
-pip install vikingrag
-```
+Providers via env: `VIKINGRAG_LLM_PROVIDER=openai|deepseek|gemini|anthropic|vllm` (and matching embeddings). Production rejects `fake` / `deterministic` / `scripted`.
 
 ---
 

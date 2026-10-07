@@ -1,26 +1,16 @@
-# README / docs visuals
+# README visuals
 
-Put images here so GitHub can render them from the README.
+Optional images for the GitHub README. Drop exports here, then uncomment the matching `<img>` tags under **Why VikingRAG?** in the root `README.md`.
 
-Suggested filenames (drop your exports into this folder):
-
-| File | Use in README |
+| File | Suggested use |
 |---|---|
-| `comparison-accuracy.png` | Accuracy vs baselines (paper Fig 3 style) |
+| `comparison-accuracy.png` | Accuracy vs baselines |
 | `comparison-tokens.png` | Token cost comparison |
-| `architecture-overview.png` | Optional rendered architecture (Mermaid is already inline) |
-| `flow-eplus.png` | One-round E+ vs agentic escalation |
+| `architecture-overview.png` | Optional diagram (Mermaid is already inline) |
+| `flow-eplus.png` | E+ one-round vs agentic escalation |
 
-**Rules**
+Guidelines:
 
-- Prefer PNG or SVG under ~1–2 MB each
-- Do **not** invent numbers — only charts from real runs or clearly labeled paper figures with citation
-- Link from README as: `![label](docs/assets/your-file.png)`
-
-Example (uncomment in README once files exist):
-
-```markdown
-<p align="center">
-  <img src="docs/assets/comparison-tokens.png" alt="Token comparison" width="720" />
-</p>
-```
+- PNG or SVG, roughly under 1–2 MB each
+- Only charts from your real runs, or clearly cited paper figures
+- Link as: `![label](docs/assets/your-file.png)`

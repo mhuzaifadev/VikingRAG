@@ -47,9 +47,9 @@ Faithful algorithm behavior is separated from production extensions. Deviations 
 | Full 8 baselines | Comparative tables | Flat RAG + three VikingRAG modes in harness | Separate validation gate |
 | SUPPORT default | Always LLM | Default `deterministic`; set `VIKINGRAG_RETRIEVAL_SUPPORT_SELECTOR=llm` for paper fidelity | Offline/CI safety |
 
-## Unmeasured / blocked
+## Unmeasured (until you run them)
 
-- Full paid paper-table reproduction: **BLOCKED** (no invented scores)
-- Real-provider smoke: **BLOCKED** unless credentials configured
-- Historical warm-up live generation: **BLOCKED** (CLI scaffolds plan only)
-- Migration-backed integration on CI: wired in `.github/workflows/ci.yml` (requires services)
+- Full paid paper-table reproduction — requires corpora + real LLM runs
+- Real-provider production smoke — requires credentials
+- Historical warm-up live generation — CLI scaffolds a plan until corpus + LLM exist
+- CI integration — wired in `.github/workflows/ci.yml` (Postgres/Redis services)
