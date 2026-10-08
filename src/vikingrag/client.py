@@ -2,24 +2,37 @@
 
 Example::
 
-    from vikingrag.client import VikingRAGClient
-
-    client = VikingRAGClient.from_settings()
-    # client.search / client.answer / client.database ...
+    async with VikingRAGClient.from_settings() as rag:
+        doc = await rag.ingest("policy.md")
+        await rag.index(doc.id)
+        answer = await rag.ask(
+            "What is the cancellation policy?",
+            document_ids=[doc.id],
+            mode="vikingrag_e_plus",
+            learning_policy="record_only",
+        )
 """
 
 from __future__ import annotations
 
+import asyncio
+import mimetypes
 from dataclasses import dataclass, field
-from typing import Any
+from pathlib import Path
+from typing import Any, Self
+from uuid import UUID
 
 from vikingrag.application.answer.generate import AnswerGenerator
+from vikingrag.application.documents import DocumentService
 from vikingrag.application.grep_primitive import GrepService
+from vikingrag.application.indexing import DocumentIndexingService
 from vikingrag.application.list_primitive import ListService
 from vikingrag.application.read_primitive import ReadService
 from vikingrag.application.search import SemanticSearchService
 from vikingrag.domain.errors import NotImplementedCapabilityError
-from vikingrag.domain.models.answer import ExecutionMode
+from vikingrag.domain.models.answer import AnswerRequest, AnswerResponse, ExecutionMode
+from vikingrag.domain.models.document import DocumentId
+from vikingrag.domain.models.experience import ExperienceSnapshotId, LearningPolicy
 from vikingrag.infrastructure.database.engine import Database, create_database
 from vikingrag.infrastructure.object_store.factory import build_object_store
 from vikingrag.observability.logging import get_logger
@@ -28,6 +41,7 @@ from vikingrag.providers.factory import (
     build_embedding_provider,
     build_llm_provider,
     build_reranker,
+    build_summary_generator,
 )
 from vikingrag.providers.llm.base import LLMProvider
 from vikingrag.settings.config import Settings, get_settings
@@ -35,9 +49,17 @@ from vikingrag.settings.config import Settings, get_settings
 logger = get_logger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class DocumentRef:
+    id: DocumentId
+    content_hash: str
+    status: str
+    skipped: bool = False
+
+
 @dataclass
 class VikingRAGClient:
-    """Composable SDK entry point for embedders, search, and answers."""
+    """Composable SDK entry point for ingest, index, ask, and explain."""
 
     settings: Settings
     database: Database
@@ -102,6 +124,12 @@ class VikingRAGClient:
             _owns_database=True,
         )
 
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
     def require_search_plus(self, mode: ExecutionMode | str) -> Any:
         """Return Search+ or raise — never silently degrade E/E+ to ordinary Search."""
         mode_value = mode.value if isinstance(mode, ExecutionMode) else str(mode)
@@ -131,6 +159,109 @@ class VikingRAGClient:
             database=self.database,
         )
 
+    def document_service(self) -> DocumentService:
+        return DocumentService(
+            database=self.database,
+            object_store=self.object_store,
+            ingestion_settings=self.settings.ingestion,
+        )
+
+    def indexing_service(self) -> DocumentIndexingService:
+        return DocumentIndexingService(
+            database=self.database,
+            summary_generator=build_summary_generator(self.settings),
+            embedding_provider=self.embedding,
+            indexing_settings=self.settings.indexing,
+            embedding_settings=self.settings.embedding,
+        )
+
+    async def ingest(
+        self,
+        source: str | Path | bytes,
+        *,
+        filename: str | None = None,
+        mime_type: str | None = None,
+        external_id: str | None = None,
+    ) -> DocumentRef:
+        """Ingest a file path or raw bytes into the document store."""
+        if isinstance(source, bytes):
+            content = source
+            name = filename or "upload.bin"
+            mime = mime_type or "application/octet-stream"
+        else:
+            path = Path(source)
+            content = await asyncio.to_thread(path.read_bytes)
+            name = filename or path.name
+            guessed, _ = mimetypes.guess_type(name)
+            mime = mime_type or guessed or "application/octet-stream"
+        result = await self.document_service().ingest(
+            filename=name,
+            mime_type=mime,
+            content=content,
+            external_id=external_id,
+        )
+        return DocumentRef(
+            id=result.document_id,
+            content_hash=result.content_hash,
+            status=result.status,
+            skipped=result.skipped,
+        )
+
+    async def index(self, document_id: DocumentId | UUID | str, **kwargs: Any) -> Any:
+        """Build summaries + embeddings for an ingested document."""
+        doc_id = DocumentId(UUID(str(document_id)))
+        return await self.indexing_service().index_document(doc_id, **kwargs)
+
+    async def ask(
+        self,
+        question: str,
+        *,
+        document_ids: list[DocumentId | UUID | str] | tuple[DocumentId, ...] | None = None,
+        mode: ExecutionMode | str = ExecutionMode.VIKINGRAG,
+        learning_policy: LearningPolicy | str = LearningPolicy.LEARN,
+        snapshot_id: ExperienceSnapshotId | UUID | str | None = None,
+        instructions: str | None = None,
+    ) -> AnswerResponse:
+        """Answer a question with explicit mode and learning policy."""
+        exec_mode = mode if isinstance(mode, ExecutionMode) else ExecutionMode(str(mode))
+        policy = (
+            learning_policy
+            if isinstance(learning_policy, LearningPolicy)
+            else LearningPolicy(str(learning_policy))
+        )
+        self.require_search_plus(exec_mode)
+        docs: tuple[DocumentId, ...] = ()
+        if document_ids:
+            docs = tuple(DocumentId(UUID(str(d))) for d in document_ids)
+        snap: ExperienceSnapshotId | None = None
+        if snapshot_id is not None:
+            snap = ExperienceSnapshotId(UUID(str(snapshot_id)))
+        return await self.answer_generator().generate(
+            AnswerRequest(
+                question=question,
+                document_ids=docs,
+                execution_mode=exec_mode,
+                learning_policy=policy,
+                snapshot_id=snap,
+                instructions=instructions,
+            )
+        )
+
+    async def explain(
+        self,
+        query_id: UUID | str,
+        *,
+        permitted_document_ids: frozenset[DocumentId] | None = None,
+    ) -> dict[str, Any]:
+        """Load a stored answer/run explanation (Milestone C)."""
+        from vikingrag.application.experience.explain import explain_query_run
+
+        return await explain_query_run(
+            self.database,
+            query_id=UUID(str(query_id)),
+            permitted_document_ids=permitted_document_ids,
+        )
+
     async def aclose(self) -> None:
         if self._closed:
             return
@@ -138,7 +269,6 @@ class VikingRAGClient:
         close = getattr(self.llm, "aclose", None)
         if close is not None:
             await close()
-        # Search+ reuses the same embedding provider; close once via self.embedding.
         close_e = getattr(self.embedding, "aclose", None)
         if close_e is not None:
             await close_e()

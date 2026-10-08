@@ -11,6 +11,7 @@ from uuid import UUID
 
 from vikingrag.domain.models.answer import AnswerRequest, AnswerResponse, ExecutionMode
 from vikingrag.domain.models.document import DocumentId
+from vikingrag.domain.models.experience import LearningPolicy
 
 
 class ManifestValidationError(ValueError):
@@ -43,6 +44,8 @@ class EvalRunReport:
     results: list[MethodResult]
     measured_scores: dict[str, Any] | None
     notes: str
+    export_metrics: dict[str, Any] | None = None
+    official_baseline: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,7 +53,18 @@ class EvalRunReport:
             "methods": list(self.methods),
             "results": [asdict(r) for r in self.results],
             "measured_scores": self.measured_scores,
+            "export_metrics": self.export_metrics,
+            "official_baseline": self.official_baseline
+            or {
+                "method": "official_vikingrag_e_plus",
+                "status": "not_run",
+                "reason": (
+                    "Official AGPL runner is not vendored; pin a separate checkout/container "
+                    "to measure, or leave as not_run."
+                ),
+            },
             "notes": self.notes,
+            "learning_policy": LearningPolicy.FROZEN.value,
         }
 
 
@@ -98,8 +112,15 @@ def _parse_document_ids(raw: tuple[str, ...]) -> tuple[DocumentId, ...]:
     return parse_document_ids(raw)
 
 
-def build_vikingrag_methods(client: Any) -> dict[str, AnswerCallable]:
-    """Map paper method names to ``AnswerGenerator.generate`` with execution modes."""
+def build_vikingrag_methods(
+    client: Any,
+    *,
+    learning_policy: LearningPolicy = LearningPolicy.FROZEN,
+) -> dict[str, AnswerCallable]:
+    """Map paper method names to ``AnswerGenerator.generate`` with execution modes.
+
+    Held-out evaluation defaults to ``frozen`` so scoring cannot enqueue edge builds.
+    """
 
     generator = client.answer_generator()
 
@@ -110,6 +131,7 @@ def build_vikingrag_methods(client: Any) -> dict[str, AnswerCallable]:
                     question=question,
                     document_ids=parse_document_ids(document_ids, field="document_ids"),
                     execution_mode=mode,
+                    learning_policy=learning_policy,
                 )
             )
             if not isinstance(resp, AnswerResponse):
@@ -141,17 +163,27 @@ def resolve_methods(
     names: list[str] | tuple[str, ...] | None,
     *,
     client: Any | None = None,
+    learning_policy: LearningPolicy = LearningPolicy.FROZEN,
 ) -> dict[str, AnswerCallable]:
     """Build method callables from a comma-split name list."""
     selected = list(names) if names else list(DEFAULT_EVAL_METHODS)
     out: dict[str, AnswerCallable] = {}
-    need_client = any(n in VIKINGRAG_METHOD_MODES for n in selected)
+    need_client = any(
+        n.strip().lower() in VIKINGRAG_METHOD_MODES or n.strip().lower() == "flat_rag"
+        for n in selected
+    )
     if need_client and client is None:
         raise ValueError(
             "VikingRAG methods require a VikingRAGClient; "
             "pass client= or construct via VikingRAGClient.from_settings()"
         )
-    viking = build_vikingrag_methods(client) if client is not None else {}
+    viking = (
+        build_vikingrag_methods(client, learning_policy=learning_policy)
+        if client is not None
+        else {}
+    )
+    if client is not None and any(n.strip().lower() == "flat_rag" for n in selected):
+        viking["flat_rag"] = _make_flat_rag(client, learning_policy=learning_policy)
     for name in selected:
         key = name.strip().lower()
         if key in {"echo", "echo_placeholder"}:
@@ -159,9 +191,34 @@ def resolve_methods(
         elif key in viking:
             out[key] = viking[key]
         else:
-            known = ", ".join([*DEFAULT_EVAL_METHODS, "echo"])
+            known = ", ".join([*DEFAULT_EVAL_METHODS, "flat_rag", "echo"])
             raise ValueError(f"Unknown method {name!r}; known: {known}")
     return out
+
+
+def _make_flat_rag(
+    client: Any, *, learning_policy: LearningPolicy = LearningPolicy.FROZEN
+) -> AnswerCallable:
+    """Single-shot Search + Read baseline without agent / Search+."""
+
+    async def _call(question: str, *, document_ids: tuple[str, ...] = ()) -> AnswerResponse:
+        # Flat RAG uses ordinary vikingrag mode with learning frozen; agent still runs
+        # but without Search+. Callers comparing modes should use identical budgets.
+        generator = client.answer_generator()
+        resp = await generator.generate(
+            AnswerRequest(
+                question=question,
+                document_ids=parse_document_ids(document_ids, field="document_ids"),
+                execution_mode=ExecutionMode.VIKINGRAG,
+                learning_policy=learning_policy,
+                instructions="Answer from top retrieved chunks only; do not use experience edges.",
+            )
+        )
+        if not isinstance(resp, AnswerResponse):
+            raise TypeError(f"expected AnswerResponse, got {type(resp)!r}")
+        return resp
+
+    return _call
 
 
 def citation_validity_metrics(results: list[MethodResult]) -> dict[str, Any]:
@@ -197,6 +254,75 @@ def citation_validity_metrics(results: list[MethodResult]) -> dict[str, Any]:
             "citation_presence_rate": (int(b["with_citations"]) / scored) if scored else 0.0,
         }
     return scores
+
+
+def _percentile(sorted_vals: list[float], p: float) -> float | None:
+    if not sorted_vals:
+        return None
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    k = (len(sorted_vals) - 1) * (p / 100.0)
+    f = int(k)
+    c = min(f + 1, len(sorted_vals) - 1)
+    if f == c:
+        return sorted_vals[f]
+    return sorted_vals[f] + (sorted_vals[c] - sorted_vals[f]) * (k - f)
+
+
+def export_latency_and_usage(results: list[MethodResult]) -> dict[str, Any]:
+    """Aggregate latency p50/p95, token sums, and route/error rates per method."""
+    by_method: dict[str, list[MethodResult]] = {}
+    for r in results:
+        by_method.setdefault(r.method, []).append(r)
+
+    out: dict[str, Any] = {}
+    for method, rows in by_method.items():
+        latencies = sorted(r.latency_ms for r in rows if r.error is None)
+        in_tok = sum(int((r.usage or {}).get("input_tokens") or 0) for r in rows)
+        out_tok = sum(int((r.usage or {}).get("output_tokens") or 0) for r in rows)
+        errors = sum(1 for r in rows if r.error)
+        out[method] = {
+            "n": len(rows),
+            "errors": errors,
+            "failure_rate": (errors / len(rows)) if rows else 0.0,
+            "latency_ms": {
+                "p50": _percentile(latencies, 50),
+                "p95": _percentile(latencies, 95),
+            },
+            "tokens": {"input": in_tok, "output": out_tok},
+        }
+    return out
+
+
+def write_export_csv(report: EvalRunReport, path: Path) -> None:
+    """Write a flat CSV of per-example results for external analysis."""
+    import csv
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=[
+                "method",
+                "example_id",
+                "latency_ms",
+                "citation_count",
+                "error",
+                "answered",
+            ],
+        )
+        writer.writeheader()
+        for r in report.results:
+            writer.writerow(
+                {
+                    "method": r.method,
+                    "example_id": r.example_id,
+                    "latency_ms": f"{r.latency_ms:.3f}",
+                    "citation_count": r.citation_count,
+                    "error": r.error or "",
+                    "answered": bool(r.answer and r.answer.strip()),
+                }
+            )
 
 
 def execution_status(results: list[MethodResult], *, judged: bool) -> str:
@@ -298,16 +424,18 @@ async def run_evaluation(
     judged = judge_key in {"scripted", "citation", "deterministic"}
     status = execution_status(results, judged=judged)
     measured = citation_validity_metrics(results) if judged else None
+    export = export_latency_and_usage(results)
     if judged:
         notes = (
             "Deterministic citation_presence_rate / non_empty_answer_rate only. "
-            "Not LLM answer accuracy. "
+            "Not LLM answer accuracy. Held-out learning_policy=frozen. "
             f"execution_status={status}."
         )
     else:
         notes = (
             "Answers recorded with latency/usage/citation_count. "
             "measured_scores is null until --judge scripted (or equivalent) is set. "
+            "Held-out learning_policy=frozen. "
             f"execution_status={status}."
         )
     return EvalRunReport(
@@ -315,5 +443,6 @@ async def run_evaluation(
         methods=tuple(methods.keys()),
         results=results,
         measured_scores=measured,
+        export_metrics=export,
         notes=notes,
     )

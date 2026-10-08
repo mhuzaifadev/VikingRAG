@@ -15,6 +15,28 @@ QueryRunId = NewType("QueryRunId", UUID)
 RetrievalEventId = NewType("RetrievalEventId", UUID)
 ExperiencePayloadId = NewType("ExperiencePayloadId", UUID)
 ExperienceEdgeId = NewType("ExperienceEdgeId", UUID)
+ExperienceSnapshotId = NewType("ExperienceSnapshotId", UUID)
+
+
+class LearningPolicy(StrEnum):
+    """Controls whether a completed answer may mutate experience edges.
+
+    - off: do not persist a learning job
+    - record_only: persist query_run + events; never build edges
+    - learn: enqueue PENDING edge-build jobs (default production path)
+    - frozen: refuse enqueue; workers must not activate new edges for this run
+    """
+
+    OFF = "off"
+    RECORD_ONLY = "record_only"
+    LEARN = "learn"
+    FROZEN = "frozen"
+
+
+class SnapshotStatus(StrEnum):
+    ACTIVE = "active"
+    FROZEN = "frozen"
+    ARCHIVED = "archived"
 
 
 class QueryRunStatus(StrEnum):
@@ -82,6 +104,25 @@ class ExperienceExpansionLimits:
 
 
 @dataclass(slots=True)
+class ExperienceSnapshot:
+    """Named, versioned set of experience edges for warm-up / held-out isolation."""
+
+    id: ExperienceSnapshotId
+    name: str
+    status: SnapshotStatus = SnapshotStatus.ACTIVE
+    corpus_id: UUID | None = None
+    edge_ids: tuple[ExperienceEdgeId, ...] = ()
+    payload_ids: tuple[ExperiencePayloadId, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("ExperienceSnapshot.name must be non-empty")
+
+
+@dataclass(slots=True)
 class QueryRun:
     id: QueryRunId
     query_text: str
@@ -93,6 +134,8 @@ class QueryRun:
     embedding_identity: EmbeddingIdentity | None = None
     edge_build_status: EdgeBuildStatus = EdgeBuildStatus.NONE
     edge_build_error: str | None = None
+    learning_policy: LearningPolicy = LearningPolicy.LEARN
+    snapshot_id: ExperienceSnapshotId | None = None
     tenant_id: UUID | None = None
     corpus_id: UUID | None = None
     document_ids: tuple[DocumentId, ...] = ()
@@ -243,3 +286,7 @@ def new_experience_payload_id() -> ExperiencePayloadId:
 
 def new_experience_edge_id() -> ExperienceEdgeId:
     return ExperienceEdgeId(uuid4())
+
+
+def new_experience_snapshot_id() -> ExperienceSnapshotId:
+    return ExperienceSnapshotId(uuid4())

@@ -170,10 +170,18 @@ async def _async_sleep(seconds: float) -> None:
 
 
 def _client_answer_fn(client: Any, *, mode: ExecutionMode) -> AnswerFn:
+    from vikingrag.domain.models.experience import LearningPolicy
+
     generator = client.answer_generator()
 
     async def _answer(question: str) -> Any:
-        return await generator.generate(AnswerRequest(question=question, execution_mode=mode))
+        return await generator.generate(
+            AnswerRequest(
+                question=question,
+                execution_mode=mode,
+                learning_policy=LearningPolicy.LEARN,
+            )
+        )
 
     return _answer
 
@@ -239,28 +247,44 @@ def run_warmup(
     if smoke_max is not None:
         m = min(m, max(1, smoke_max))
 
-    questions = asyncio.run(
-        generate_historical_questions(llm=llm, corpus_excerpt=excerpt, m=m, model=model)
-    )
+    bound_answer = answer_fn
+    bound_drain = drain_fn
+    if materialize and bound_answer is None and client is not None:
+        bound_answer = _client_answer_fn(client, mode=execution_mode)
+        bound_drain = bound_drain or _client_drain_fn(client)
+    if materialize and bound_answer is None:
+        raise WarmupBlockedError(
+            "materialize=True requires a VikingRAGClient or answer_fn; "
+            "cannot complete experience materialization. Status: BLOCKED."
+        )
 
-    edges_built = 0
-    jobs_drained = 0
-    if materialize:
-        bound_answer = answer_fn
-        bound_drain = drain_fn
-        if bound_answer is None and client is not None:
-            bound_answer = _client_answer_fn(client, mode=execution_mode)
-            bound_drain = bound_drain or _client_drain_fn(client)
-        if bound_answer is not None:
-            jobs_drained, edges_built = asyncio.run(
-                materialize_edges_from_questions(
-                    questions=questions,
-                    answer_fn=bound_answer,
-                    drain_fn=bound_drain,
-                    execution_mode=execution_mode,
-                    drain_timeout_s=drain_timeout_s,
-                )
+    async def _run_all() -> tuple[list[str], int, int]:
+        qs = await generate_historical_questions(llm=llm, corpus_excerpt=excerpt, m=m, model=model)
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for q in qs:
+            key = q.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(q)
+        jobs = 0
+        edges = 0
+        if materialize and bound_answer is not None:
+            jobs, edges = await materialize_edges_from_questions(
+                questions=deduped,
+                answer_fn=bound_answer,
+                drain_fn=bound_drain,
+                execution_mode=execution_mode,
+                drain_timeout_s=drain_timeout_s,
             )
+            if materialize and jobs == 0 and edges == 0 and bound_drain is not None:
+                # Soft signal — materialization attempted; caller inspects counts
+                pass
+        return deduped, jobs, edges
+
+    questions, jobs_drained, edges_built = asyncio.run(_run_all())
 
     out_dir = data_root / "warmup"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -276,6 +300,7 @@ def run_warmup(
         "measured_scores": None,
         "status": "completed",
         "execution_mode": execution_mode.value if materialize else None,
+        "learning_policy": "learn" if materialize else None,
     }
     manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return WarmupResult(

@@ -217,6 +217,10 @@ class QueryRunRow(Base):
         String(64), nullable=False, default="none", index=True
     )
     edge_build_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    learning_policy: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="learn", index=True
+    )
+    snapshot_id: Mapped[Any | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     total_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     retrieval_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -290,6 +294,31 @@ class ExperiencePayloadRow(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    )
+
+
+class ExperienceSnapshotRow(Base):
+    __tablename__ = "experience_snapshots"
+
+    id: Mapped[Any] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(String(256), nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False, default="active", index=True)
+    corpus_id: Mapped[Any | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    edge_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    payload_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
 

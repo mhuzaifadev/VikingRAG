@@ -34,6 +34,8 @@ docs/**/*.pdf
 # Internal planning / completion specs — do not publish with the product docs
 docs/*-completion-spec.md
 docs/*-spec.md
+docs/*-plan.md
+docs/*-comparison*.md
 docs/plans/
 .cursor/plans/
 *.plan.md

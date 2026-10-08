@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from vikingrag.application.experience.builder import ExperienceEdgeBuilder
+from vikingrag.application.experience.policy import worker_may_build
 from vikingrag.domain.models.experience import EdgeBuildStatus, QueryRunStatus
 from vikingrag.infrastructure.database.engine import Database
 from vikingrag.infrastructure.database.repositories.experience import (
@@ -81,6 +82,19 @@ class EdgeBuilderWorker:
 
             done = 0
             for run in claimed:
+                if not worker_may_build(run):
+                    run.edge_build_status = EdgeBuildStatus.SKIPPED
+                    run.edge_build_error = (
+                        f"learning_policy_{run.learning_policy.value}_refused_by_worker"
+                    )
+                    await runs_repo.update(run)
+                    logger.info(
+                        "edge_builder_job_refused",
+                        run_id=str(run.id),
+                        learning_policy=run.learning_policy.value,
+                    )
+                    done += 1
+                    continue
                 try:
                     result = await builder.build_for_run(run)
                     logger.info(

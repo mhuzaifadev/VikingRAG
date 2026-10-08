@@ -1,0 +1,15 @@
+{
+  "notes": "Warm-up / historical questions derived from corpus phrasing only — not held-out gold.",
+  "questions": [
+    "What payment methods does billing accept?",
+    "When are monthly invoices generated?",
+    "How many days after purchase is the cooling-off period?",
+    "What is the late fee amount for unpaid invoices?",
+    "What are Standard support business hours?",
+    "What is the initial response target for Priority support?",
+    "Where should security incidents be reported?",
+    "How many days notice do Enterprise contracts require before renewal?",
+    "What happens after the second failed payment retry?",
+    "Is cryptocurrency accepted for payment?"
+  ]
+}

@@ -37,6 +37,24 @@ make dev
 - `make docker-down` — stop containers, **keep volumes**
 - `make docker-reset` — destroy volumes (`docker compose down -v`)
 
+## Learning policy (ops)
+
+| Policy | Persist run | Build edges | Typical use |
+|---|---|---|---|
+| `off` | no | no | Debug without learning |
+| `record_only` | yes | skip | Audit traces without mutating edges |
+| `learn` | yes | pending → worker | Warm-up / production learning |
+| `frozen` | yes | refuse | Held-out scoring (eval default) |
+
+After warm-up, freeze a snapshot (or keep scoring on `frozen`) so edge counts stay stable. Document replace/delete invalidates old-revision edges.
+
+Explain a past answer (offline, no new LLM calls):
+
+```bash
+vikingrag-eval explain --query-id <experience_query_run_id>
+# or GET /v1/answers/{query_run_id}/explain
+```
+
 ## Deploy checklist
 
 ### 1. Offline quality (no paid APIs)
@@ -49,15 +67,17 @@ make test
 uv run vikingrag-eval smoke --offline
 ```
 
-Expect: lint/typecheck clean; unit + evaluation tests green; smoke `status: "ok"` with `"measured_scores": null`.
+Expect: lint/typecheck clean; unit + evaluation tests green (includes learning-policy + explain unit coverage); smoke `status: "ok"` with `"measured_scores": null`.
 
 ### 2. Integration (Postgres + Redis)
 
 ```bash
 make docker-up
-make migrate
+make migrate   # includes 20261008_0005 learning_policy + experience_snapshots
 make test-integration
 ```
+
+Production Compose: `docker compose -f docker-compose.prod.yml up -d --build` — migrate + API + edge-builder worker roles.
 
 ### 3. Local API smoke (fake providers OK for wiring)
 

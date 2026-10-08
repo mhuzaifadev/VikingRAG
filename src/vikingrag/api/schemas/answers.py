@@ -16,6 +16,8 @@ class AnswerRequestBody(BaseModel):
     instructions: str | None = None
     max_rounds: int | None = Field(default=None, ge=1, le=50)
     execution_mode: Literal["vikingrag", "vikingrag_e", "vikingrag_e_plus"] = "vikingrag"
+    learning_policy: Literal["off", "record_only", "learn", "frozen"] = "learn"
+    snapshot_id: UUID | None = None
 
 
 class QueryRequestBody(AnswerRequestBody):

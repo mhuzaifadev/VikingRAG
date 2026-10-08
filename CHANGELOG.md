@@ -1,8 +1,28 @@
 # Changelog
 
+## v0.5.0
+
+Independent Postgres/pgvector production release: controllable experience learning, SDK lifecycle, replayable traces, and honest eval exports. Paper charts remain paper results — score claims require Milestone D exports only. Official AGPL runner is never vendored (`official_baseline.status=not_run` unless you pin a separate checkout).
+
+### Added
+
+- `LearningPolicy`: `off` | `record_only` | `learn` | `frozen` on answers, enqueue, and edge-builder worker
+- `experience_snapshots` migration + create/activate/freeze/rollback helpers
+- Scoped experience expansion (`uri_in_scope` + permitted document filter)
+- SDK: `async with VikingRAGClient.from_settings()`, `ingest` / `index` / `ask` / `explain`
+- API: `learning_policy` / `snapshot_id` on answer bodies; `GET /v1/answers/{query_run_id}/explain`
+- Eval: held-out default `frozen`; `flat_rag` method; latency/token export metrics + CSV; `vikingrag-eval explain`
+- Warm-up: single asyncio loop; deduped questions; `learn` during materialize; fail if materialize incomplete
+- Example: `examples/voca_faq/`; fixture corpus + held-out manifest under `tests/fixtures/voca_faq/`
+
+### Changed
+
+- README positioning: independent implementation; official repo + paper linked; measured section from exports only
+- PAPER_PARITY / EVALUATION / OPERATIONS updated for 0.5.0 gates
+
 ## v0.4.4
 
-Correctness hotfix for confirmed release risks. Controlled learning policies, full SDK workflow, replayable traces, and measured benchmarks remain **deferred to v0.5.0** (see `docs/VikingRAG-official-comparison-v0.5.0-plan.md`).
+Correctness hotfix for confirmed release risks. Controlled learning policies, full SDK workflow, replayable traces, and measured benchmarks were deferred to v0.5.0.
 
 ### Fixed
 

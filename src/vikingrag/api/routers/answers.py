@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from importlib import import_module
 from typing import Annotated, Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request
 
@@ -21,6 +21,7 @@ from vikingrag.application.read_primitive import ReadService
 from vikingrag.application.search import SemanticSearchService
 from vikingrag.domain.models.answer import AnswerRequest, ExecutionMode
 from vikingrag.domain.models.document import DocumentId
+from vikingrag.domain.models.experience import ExperienceSnapshotId, LearningPolicy
 from vikingrag.observability.logging import get_logger
 from vikingrag.providers.factory import (
     build_embedding_provider,
@@ -100,10 +101,13 @@ def _answer_generator(request: Request) -> AnswerGenerator:
 
 
 def _to_domain(body: AnswerRequestBody) -> AnswerRequest:
+    snap = ExperienceSnapshotId(UUID(str(body.snapshot_id))) if body.snapshot_id else None
     return AnswerRequest(
         question=body.question,
         document_ids=tuple(DocumentId(x) for x in body.document_ids),
         execution_mode=ExecutionMode(body.execution_mode),
+        learning_policy=LearningPolicy(body.learning_policy),
+        snapshot_id=snap,
         instructions=body.instructions,
         max_rounds=body.max_rounds,
         query_id=uuid4(),
@@ -135,3 +139,19 @@ async def query(
         permitted_document_ids=auth.permitted_document_ids,
     )
     return AnswerResponseBody.from_domain(result)
+
+
+@router.get("/answers/{query_run_id}/explain")
+async def explain_answer(
+    request: Request,
+    query_run_id: UUID,
+    auth: Annotated[AuthContext, Depends(require_auth)],
+) -> dict[str, Any]:
+    """Offline replay of a persisted query run (no new LLM calls)."""
+    from vikingrag.application.experience.explain import explain_query_run
+
+    return await explain_query_run(
+        request.app.state.database,
+        query_id=query_run_id,
+        permitted_document_ids=auth.permitted_document_ids,
+    )

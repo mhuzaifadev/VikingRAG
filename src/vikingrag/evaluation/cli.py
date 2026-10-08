@@ -131,10 +131,40 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(
             f"wrote={out} status={status} measured_scores={'set' if scores is not None else 'null'}"
         )
+        if args.csv:
+            from vikingrag.evaluation.runner import write_export_csv
+
+            csv_path = Path(args.csv)
+            write_export_csv(report_obj, csv_path)
+            print(f"wrote_csv={csv_path}")
     else:
         print(payload, end="")
     if status in {"failed", "partial"}:
         return 1
+    return 0
+
+
+def _cmd_explain(args: argparse.Namespace) -> int:
+    import asyncio
+    import json
+
+    from vikingrag.client import VikingRAGClient
+
+    async def _run() -> dict[str, object]:
+        async with VikingRAGClient.from_settings() as client:
+            return await client.explain(args.query_id)
+
+    try:
+        payload = asyncio.run(_run())
+    except Exception as exc:
+        print(f"explain_failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    text = json.dumps(payload, indent=2) + "\n"
+    if args.output:
+        Path(args.output).write_text(text, encoding="utf-8")
+        print(f"wrote={args.output}")
+    else:
+        print(text, end="")
     return 0
 
 
@@ -271,7 +301,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional: 'scripted' for deterministic citation/non-empty rates (not LLM accuracy)",
     )
+    run.add_argument(
+        "--csv",
+        type=str,
+        default=None,
+        help="Optional path to write a flat CSV export alongside --output JSON",
+    )
     run.set_defaults(func=_cmd_run)
+
+    explain = sub.add_parser(
+        "explain",
+        help="Offline replay of a persisted query run (no new LLM calls)",
+    )
+    explain.add_argument(
+        "--query-id", required=True, help="experience_query_run_id or answer query_id"
+    )
+    explain.add_argument("--output", type=str, default=None, help="Write JSON path")
+    explain.set_defaults(func=_cmd_explain)
 
     warmup = sub.add_parser(
         "warmup",

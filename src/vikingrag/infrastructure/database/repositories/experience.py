@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import String, cast, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vikingrag.domain.models.document import DocumentId, NodeId
@@ -17,6 +17,8 @@ from vikingrag.domain.models.experience import (
     ExperienceEdgeStatus,
     ExperiencePayload,
     ExperiencePayloadId,
+    ExperienceSnapshotId,
+    LearningPolicy,
     QueryRun,
     QueryRunId,
     QueryRunRoute,
@@ -60,6 +62,12 @@ def _to_query_run(row: QueryRunRow) -> QueryRun:
         embedding_identity=_identity_from_run_row(row),
         edge_build_status=EdgeBuildStatus(row.edge_build_status),
         edge_build_error=row.edge_build_error,
+        learning_policy=LearningPolicy(getattr(row, "learning_policy", None) or "learn"),
+        snapshot_id=(
+            ExperienceSnapshotId(UUID(str(row.snapshot_id)))
+            if getattr(row, "snapshot_id", None) is not None
+            else None
+        ),
         tenant_id=row.tenant_id,
         corpus_id=row.corpus_id,
         document_ids=tuple(
@@ -208,6 +216,8 @@ class SqlQueryRunRepository:
             status=run.status.value,
             edge_build_status=run.edge_build_status.value,
             edge_build_error=run.edge_build_error,
+            learning_policy=run.learning_policy.value,
+            snapshot_id=run.snapshot_id,
             total_input_tokens=run.total_input_tokens,
             total_output_tokens=run.total_output_tokens,
             retrieval_tokens=run.retrieval_tokens,
@@ -224,6 +234,19 @@ class SqlQueryRunRepository:
 
     async def get(self, run_id: QueryRunId) -> QueryRun | None:
         row = await self._session.get(QueryRunRow, run_id)
+        return _to_query_run(row) if row else None
+
+    async def get_by_answer_query_id(self, answer_query_id: UUID | str) -> QueryRun | None:
+        """Resolve a run via ``metadata.query_id`` (AnswerRequest.query_id)."""
+        key = str(answer_query_id)
+        stmt = (
+            select(QueryRunRow)
+            .where(cast(QueryRunRow.metadata_["query_id"], String) == key)
+            .order_by(QueryRunRow.created_at.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        row = result.scalar_one_or_none()
         return _to_query_run(row) if row else None
 
     async def update(self, run: QueryRun) -> QueryRun:
@@ -243,6 +266,8 @@ class SqlQueryRunRepository:
         row.status = run.status.value
         row.edge_build_status = run.edge_build_status.value
         row.edge_build_error = run.edge_build_error
+        row.learning_policy = run.learning_policy.value
+        row.snapshot_id = run.snapshot_id
         row.total_input_tokens = run.total_input_tokens
         row.total_output_tokens = run.total_output_tokens
         row.retrieval_tokens = run.retrieval_tokens

@@ -7,7 +7,8 @@ from collections.abc import Awaitable, Sequence
 from typing import TYPE_CHECKING, Protocol, TypeVar, runtime_checkable
 
 from vikingrag.application.experience.activate import should_activate
-from vikingrag.domain.errors import BudgetExhaustedError, DomainError
+from vikingrag.domain.errors import BudgetExhaustedError, DomainError, InvalidVikingURI
+from vikingrag.domain.models.document import DocumentId
 from vikingrag.domain.models.experience import (
     ActivatedEdge,
     ExpansionResult,
@@ -16,6 +17,7 @@ from vikingrag.domain.models.experience import (
     ExperiencePayload,
 )
 from vikingrag.domain.models.representation import EmbeddingIdentity
+from vikingrag.domain.uri.object_uri import ObjectURIParser
 from vikingrag.ingestion.tokenization import ApproxWhitespaceTokenizer
 
 if TYPE_CHECKING:
@@ -23,6 +25,39 @@ if TYPE_CHECKING:
 
 _TOKENIZER = ApproxWhitespaceTokenizer()
 _T = TypeVar("_T")
+
+
+def document_id_from_uri(uri: str) -> DocumentId | None:
+    """Best-effort document id extraction for scope checks."""
+    try:
+        return ObjectURIParser.parse(uri).document_id
+    except (InvalidVikingURI, ValueError, TypeError):
+        pass
+    # Legacy / test URIs: viking://objects/{uuid}/... or embed UUID after documents/
+    import re
+    from uuid import UUID
+
+    m = re.search(
+        r"(?:objects|documents)/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+        uri,
+    )
+    if m:
+        return DocumentId(UUID(m.group(1)))
+    return None
+
+
+def uri_in_scope(uri: str, permitted: frozenset[DocumentId] | None) -> bool:
+    """None permitted = unrestricted; empty = deny all."""
+    if permitted is None:
+        return True
+    if not permitted:
+        return False
+    doc_id = document_id_from_uri(uri)
+    if doc_id is None:
+        # Cannot prove scope — do not expose (fail closed for experience targets)
+        return False
+    return doc_id in permitted
 
 
 @runtime_checkable
@@ -53,15 +88,20 @@ async def expand_experience_edges(
     edges: EdgeLookup,
     limits: ExperienceExpansionLimits | None = None,
     ctx: RetrievalContext | None = None,
+    permitted_document_ids: frozenset[DocumentId] | None = None,
 ) -> ExpansionResult:
     """Frontier-by-frontier expansion with visited/cycle tracking and hard caps.
 
     Empty active edge store → cold path: seeds only, no activated edges.
     ``max_tokens`` charges approximate text tokens from activated payloads.
     Edge I/O honors ``RetrievalContext.await_with_deadline`` when ``ctx`` is set.
+    When ``permitted_document_ids`` is set (or taken from ``ctx``), targets outside
+    scope are never activated or expanded.
     """
     caps = limits or ExperienceExpansionLimits()
     seeds = tuple(dict.fromkeys(u for u in seed_uris if u and u.strip()))
+    if permitted_document_ids is None and ctx is not None:
+        permitted_document_ids = ctx.permitted_document_ids
 
     async def _await_edges(awaitable: Awaitable[_T]) -> _T:
         if ctx is not None:
@@ -133,6 +173,11 @@ async def expand_experience_edges(
                     truncated = True
                     truncation_reason = "max_edges"
                     break
+
+                if not uri_in_scope(edge.target_uri, permitted_document_ids):
+                    continue
+                if not uri_in_scope(edge.source_uri, permitted_document_ids):
+                    continue
 
                 ok, sim = should_activate(
                     current_query_embedding=query_embedding,

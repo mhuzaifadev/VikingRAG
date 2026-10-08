@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 from vikingrag.domain.models.document import DocumentId
 from vikingrag.domain.models.evidence import RetrievedEvidence
+from vikingrag.domain.models.experience import ExperienceSnapshotId, LearningPolicy
 
 
 class AnswerStatus(StrEnum):
@@ -39,6 +40,8 @@ class AnswerRequest:
     question: str
     document_ids: tuple[DocumentId, ...] = ()
     execution_mode: ExecutionMode = ExecutionMode.VIKINGRAG
+    learning_policy: LearningPolicy = LearningPolicy.LEARN
+    snapshot_id: ExperienceSnapshotId | None = None
     instructions: str | None = None
     max_rounds: int | None = None
     query_id: UUID = field(default_factory=uuid4)

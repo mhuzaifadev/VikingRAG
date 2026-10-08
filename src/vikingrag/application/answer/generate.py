@@ -335,11 +335,27 @@ class AnswerGenerator:
                     embedding_identity=identity if cached else None,
                     trace_events=list(events),
                     citation_uris=[c.uri for c in citations],
-                    metadata={"query_id": str(query_id_override or request.query_id)},
+                    metadata={
+                        "query_id": str(query_id_override or request.query_id),
+                        "execution_mode": request.execution_mode.value,
+                        "route": route,
+                        "escalation_reason": meta.get("escalation_reason"),
+                        "sufficiency": meta.get("assessment") or meta.get("sufficiency"),
+                        "citation_uris": [c.uri for c in citations],
+                        "rounds_used": rounds_used,
+                        "usage": dict(usage),
+                    },
+                    learning_policy=request.learning_policy,
+                    snapshot_id=request.snapshot_id,
+                    document_ids=request.document_ids,
                 )
                 if run is not None:
                     meta["experience_query_run_id"] = str(run.id)
                     meta["edge_build_status"] = run.edge_build_status.value
+                    meta["learning_policy"] = request.learning_policy.value
+                    meta["replay"] = "recorded"
+                    if request.snapshot_id is not None:
+                        meta["snapshot_id"] = str(request.snapshot_id)
             except Exception as exc:
                 logger.warning("experience_enqueue_failed", error=str(exc))
 

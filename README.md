@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/mhuzaifadev/VikingRAG">
-    <img src="https://img.shields.io/badge/VikingRAG-0.4.4-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.4.4" />
+    <img src="https://img.shields.io/badge/VikingRAG-0.5.0-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.5.0" />
   </a>
 </p>
 
@@ -11,9 +11,13 @@
 </p>
 
 <p align="center">
-  Production hierarchical RAG inspired by the
-  <a href="https://arxiv.org/abs/2609.11390"><strong>VikingRAG paper</strong></a>.<br/>
-  Hierarchy-preserving ingestion. Multi-granular semantic Search. Built to extend.
+  Independent <strong>Postgres/pgvector</strong> VikingRAG with a Python SDK and explicit control
+  over retrieval budgets and experience learning.<br/>
+  Inspired by the
+  <a href="https://arxiv.org/abs/2609.11390"><strong>VikingRAG paper</strong></a>
+  · research artifacts:
+  <a href="https://github.com/rucdatascience/VikingRAG">rucdatascience/VikingRAG</a>
+  (AGPL — not vendored here).
 </p>
 
 <p align="center">
@@ -25,7 +29,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.4.4"><img src="https://img.shields.io/badge/release-v0.4.4-blue?logo=github" alt="Release v0.4.4" /></a>
+  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.5.0"><img src="https://img.shields.io/badge/release-v0.5.0-blue?logo=github" alt="Release v0.5.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?logo=apache" alt="Apache 2.0" /></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+" /></a>
   <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white" alt="FastAPI" /></a>
@@ -85,9 +89,12 @@ This project turns those ideas into a **production-oriented** stack:
 | Cheap path / agents | Algorithm 1 agentic loop; E+ one-round fast path then escalate |
 | Evidence-first grounding | Authoritative Reads, citations, `POST /v1/answers` |
 | Experience edges | Algorithm 2 construction + Algorithm 3 Search+ (γ-gated) |
+| Controllable learning | `LearningPolicy`: off / record_only / learn / frozen + snapshots |
 | Operational constraints | Auth allowlist, migrations, prod Compose, eval smoke, typed settings |
 
-> **Independent implementation** inspired by the paper - not a fork of the AGPL research artifacts.
+> **Independent Apache-2.0 implementation** — not a fork of the AGPL research artifacts.
+> Paper charts below are **paper experiments**, not measurements from this repository.
+> Score claims require regenerable exports under [`docs/EVALUATION.md`](docs/EVALUATION.md).
 
 <p align="center">
   <img src="docs/assets/comparison-tokens.png" alt="Paper Table 3: token cost vs highest-accuracy baseline" width="720" />
@@ -152,7 +159,7 @@ make dev
 ### Option C — pip from GitHub (pre-release / specific tag)
 
 ```bash
-pip install "git+https://github.com/mhuzaifadev/VikingRAG.git@v0.4.4"
+pip install "git+https://github.com/mhuzaifadev/VikingRAG.git@v0.5.0"
 ```
 
 ### Option D — Docker Compose
@@ -183,11 +190,13 @@ Production-shaped: `docker compose -f docker-compose.prod.yml up -d --build` —
 - **Agentic Algorithm 1** - tool-calling Search/List/Grep/Read loop with shared budgets and finalization reserve
 - **Answers API** - `POST /v1/answers` and `POST /v1/query` with modes `vikingrag` / `vikingrag_e` / `vikingrag_e_plus`
 - **Experience edges** - Algorithm 2 learning jobs + Algorithm 3 Search+ expansion
-- **Evaluation scaffolding** - six dataset adapters + offline smoke (`vikingrag-eval smoke --offline`)
+- **Learning policy** - hold-out scoring with `frozen`; warm-up with `learn`; snapshots freeze/rollback
+- **Explain / replay** - `GET /v1/answers/{id}/explain` and `rag.explain(query_id)` (offline, no new LLM calls)
+- **Evaluation scaffolding** - `flat_rag` + three VikingRAG modes; Voca FAQ fixtures; CSV/JSON exports; offline smoke
 - **Auth** - optional API-key + server document allowlist (single-tenant)
 - **Shared budgets** - cumulative tool/embedding/read/LLM limits across a request
 - **Replaceable providers** - `openai` / `deepseek` / `gemini` / `anthropic` / `vllm`; fakes rejected in production
-- **SDK facade** - `VikingRAGClient` for embed-in-process use without FastAPI
+- **SDK facade** - `async with VikingRAGClient.from_settings()` → `ingest` / `index` / `ask` / `explain`
 - **Production foundation** - FastAPI, PostgreSQL + pgvector, Redis, object store, typed settings, health checks
 
 **Docs hub:** [`docs/README.md`](docs/README.md) · [`docs/RETRIEVAL.md`](docs/RETRIEVAL.md) · [`docs/PAPER_PARITY.md`](docs/PAPER_PARITY.md) · [`AGENTS.md`](AGENTS.md)
@@ -333,28 +342,25 @@ Embed VikingRAG in-process (no FastAPI server required). Still needs Postgres + 
 ```python
 import asyncio
 from vikingrag import VikingRAGClient
-from vikingrag.domain.models.answer import AnswerRequest, ExecutionMode
-from vikingrag.domain.models.representation import SearchRequest
 
 async def main() -> None:
-    client = VikingRAGClient.from_settings()
-    try:
-        hits = await client.search.search(
-            SearchRequest(query="How do we verify retrieved evidence?", top_k=5)
-        )
-        print(len(hits.candidates), "hits")
-        answer = await client.answer_generator().generate(
-            AnswerRequest(
-                question="How do we verify retrieved evidence?",
-                execution_mode=ExecutionMode.VIKINGRAG,
-            )
+    async with VikingRAGClient.from_settings() as rag:
+        doc = await rag.ingest("policy.md")
+        await rag.index(doc.id)
+        answer = await rag.ask(
+            "What is the cancellation policy?",
+            document_ids=[doc.id],
+            mode="vikingrag",
+            learning_policy="record_only",  # held-out scoring: use "frozen"
         )
         print(answer.status, (answer.answer or "")[:200])
-    finally:
-        await client.aclose()
+        run_id = answer.metadata.get("experience_query_run_id") or answer.query_id
+        print(await rag.explain(run_id))
 
 asyncio.run(main())
 ```
+
+See also [`examples/voca_faq/`](examples/voca_faq/). Advanced services remain on the client (`search`, `answer_generator()`, …).
 
 Providers via env: `VIKINGRAG_LLM_PROVIDER=openai|deepseek|gemini|anthropic|vllm` (and matching embeddings). Empty `VIKINGRAG_LLM_MODEL` uses the provider preset (e.g. Gemini → `gemini-2.5-flash`). Production rejects `fake` / `deterministic` / `scripted`.
 
@@ -376,7 +382,8 @@ Providers via env: `VIKINGRAG_LLM_PROVIDER=openai|deepseek|gemini|anthropic|vllm
 | `POST` | `/v1/retrieval/grep` | Scoped Grep |
 | `POST` | `/v1/retrieval/read` | Authoritative Read |
 | `POST` | `/v1/retrieval/evidence` | Collect evidence + assess sufficiency |
-| `POST` | `/v1/answers` | Cited answer (`vikingrag` / `vikingrag_e` / `vikingrag_e_plus`) |
+| `POST` | `/v1/answers` | Cited answer (`vikingrag` / `vikingrag_e` / `vikingrag_e_plus`; `learning_policy`) |
+| `GET` | `/v1/answers/{query_run_id}/explain` | Offline replay of a persisted run (auth-scoped) |
 | `POST` | `/v1/query` | Mode-switched query orchestration |
 | `GET` | `/v1/nodes/{id}` | Node metadata (+ optional content) |
 | `GET` | `/v1/uris/resolve?uri=` | Resolve a `viking://…` URI |

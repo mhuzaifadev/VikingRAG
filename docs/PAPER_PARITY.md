@@ -18,8 +18,10 @@ Faithful algorithm behavior is separated from production extensions. Deviations 
 | §5 | VikingRAG-E+ one-round + candidate + strict sufficiency | `orchestration/query.py`, `candidate.py` | `test_eplus_strict_gate.py` | implemented |
 | Supplement | Constraint-aware sufficiency | `assessment.py` v2 (entity/time/scope slots) | assessment units | implemented |
 | §6 / datasets | Six corpus adapters + judge scaffolding | `evaluation/adapters/*`, CLI | offline smoke | implemented (adapters; full download **blocked** without data) |
-| §6 warm-up | Historical M questions + edge warm-up | `evaluation/warmup.py`, `vikingrag-eval warmup` | CLI blocked without corpus/LLM | blocked (scaffolded) |
+| §6 warm-up | Historical M questions + edge warm-up | `evaluation/warmup.py`, `vikingrag-eval warmup` | unit + CLI | partial (live gen needs corpus+LLM) |
 | Paper profile | K=10, L=1000, B=15, γ=0.8 | `PaperProfileSettings`, `BudgetLimits.paper_profile` | settings/auth units | implemented |
+| Held-out isolation | No learning during scoring | `LearningPolicy.FROZEN` default in eval runner | `test_learning_policy.py` | implemented |
+| Flat baseline | Non-experience RAG | `flat_rag` method in `runner.py` | `test_explain_trace.py` | implemented |
 
 ## Execution modes
 
@@ -34,7 +36,9 @@ Faithful algorithm behavior is separated from production extensions. Deviations 
 - API-key auth + server document allowlist (single-tenant)
 - Durable Postgres learning jobs (`workers/edge_builder.py`); in-process lifespan or Compose sidecar
 - Multi-provider LLM presets: `openai`, `deepseek`, `gemini`, `anthropic`, `vllm`
-- Library facade: `vikingrag.client.VikingRAGClient`
+- Library facade: `VikingRAGClient` ingest/index/ask/explain + async context manager
+- `LearningPolicy` + experience snapshots; scoped edge expansion
+- Offline explain API/CLI (`GET /v1/answers/{id}/explain`, `vikingrag-eval explain`)
 - Rate/upload limits, redacted logs, production Compose
 - Fixed vector dimension 1536 with startup validation
 
@@ -45,11 +49,12 @@ Faithful algorithm behavior is separated from production extensions. Deviations 
 | Vector dim | provider-dependent | Fixed 1536 unless migrated | Operational simplicity |
 | Prod budgets | B=15 paper eval | Tighter serving defaults; paper profile selectable | Cost/latency |
 | Full 8 baselines | Comparative tables | Flat RAG + three VikingRAG modes in harness | Separate validation gate |
+| Official E+ runner | Research AGPL tree | Never vendored; export row `not_run` | License + independence |
 | SUPPORT default | Always LLM | Default `deterministic`; set `VIKINGRAG_RETRIEVAL_SUPPORT_SELECTOR=llm` for paper fidelity | Offline/CI safety |
 
 ## Unmeasured (until you run them)
 
 - Full paid paper-table reproduction — requires corpora + real LLM runs
 - Real-provider production smoke — requires credentials
-- Historical warm-up live generation — CLI scaffolds a plan until corpus + LLM exist
+- Official AGPL E+ pin — separate checkout only; leave `not_run` if blocked
 - CI integration — wired in `.github/workflows/ci.yml` (Postgres/Redis services)

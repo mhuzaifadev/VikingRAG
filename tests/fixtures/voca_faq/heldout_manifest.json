@@ -1,0 +1,37 @@
+{
+  "dataset": "voca_faq",
+  "revision": "fixture-v1",
+  "learning_policy_for_scoring": "frozen",
+  "quality_tolerances_predeclared": {
+    "non_empty_answer_rate_min": 0.0,
+    "citation_presence_rate_min": 0.0,
+    "notes": "Tolerances are placeholders for local smoke; raise before claiming quality."
+  },
+  "examples": [
+    {
+      "id": "h1",
+      "question": "How many days do Standard plan customers have to cancel for a full refund?",
+      "gold": "14 days"
+    },
+    {
+      "id": "h2",
+      "question": "What late fee applies when an invoice is unpaid 15 days past due?",
+      "gold": "$25"
+    },
+    {
+      "id": "h3",
+      "question": "What is the Priority support initial response target?",
+      "gold": "4-hour"
+    },
+    {
+      "id": "h4",
+      "question": "After how many hours of cooling-off can a self-serve purchase still be cancelled with one click?",
+      "gold": "72 hours"
+    },
+    {
+      "id": "h5",
+      "question": "When does an Enterprise early termination notice need to be given?",
+      "gold": "30 days before the renewal date"
+    }
+  ]
+}
