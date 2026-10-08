@@ -42,6 +42,8 @@ Use identical backbone prompts/budgets when comparing; record unavoidable deviat
 
 Optional `--judge scripted` records deterministic `non_empty_answer_rate` and `citation_presence_rate` only — **not** LLM answer accuracy.
 
+Malformed `document_ids` in a manifest fail closed before any provider call. Run status is `failed` / `partial` / `completed` / `completed_unjudged`; the CLI exits nonzero on `failed` or `partial`.
+
 ## Warm-up rules
 
 - Historical questions only from corpus evidence (never eval questions, gold answers, or paraphrases)

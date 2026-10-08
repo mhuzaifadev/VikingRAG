@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
+from collections.abc import Awaitable, Sequence
+from typing import TYPE_CHECKING, Protocol, TypeVar, runtime_checkable
 
 from vikingrag.application.experience.activate import should_activate
+from vikingrag.domain.errors import BudgetExhaustedError, DomainError
 from vikingrag.domain.models.experience import (
     ActivatedEdge,
     ExpansionResult,
@@ -15,6 +16,13 @@ from vikingrag.domain.models.experience import (
     ExperiencePayload,
 )
 from vikingrag.domain.models.representation import EmbeddingIdentity
+from vikingrag.ingestion.tokenization import ApproxWhitespaceTokenizer
+
+if TYPE_CHECKING:
+    from vikingrag.application.budget import RetrievalContext
+
+_TOKENIZER = ApproxWhitespaceTokenizer()
+_T = TypeVar("_T")
 
 
 @runtime_checkable
@@ -31,6 +39,12 @@ class EdgeLookup(Protocol):
     async def count_active(self) -> int: ...
 
 
+def estimate_payload_tokens(payload: ExperiencePayload) -> int:
+    """Approximate text tokens charged against ``max_tokens`` for an activated payload."""
+    text = f"{payload.query_text}\n{payload.trace_summary}"
+    return max(1, _TOKENIZER.count(text))
+
+
 async def expand_experience_edges(
     *,
     seed_uris: Sequence[str],
@@ -38,15 +52,23 @@ async def expand_experience_edges(
     identity: EmbeddingIdentity,
     edges: EdgeLookup,
     limits: ExperienceExpansionLimits | None = None,
+    ctx: RetrievalContext | None = None,
 ) -> ExpansionResult:
     """Frontier-by-frontier expansion with visited/cycle tracking and hard caps.
 
     Empty active edge store → cold path: seeds only, no activated edges.
+    ``max_tokens`` charges approximate text tokens from activated payloads.
+    Edge I/O honors ``RetrievalContext.await_with_deadline`` when ``ctx`` is set.
     """
     caps = limits or ExperienceExpansionLimits()
     seeds = tuple(dict.fromkeys(u for u in seed_uris if u and u.strip()))
 
-    if await edges.count_active() == 0:
+    async def _await_edges(awaitable: Awaitable[_T]) -> _T:
+        if ctx is not None:
+            return await ctx.await_with_deadline(awaitable)
+        return await awaitable
+
+    if await _await_edges(edges.count_active()) == 0:
         return ExpansionResult(
             seed_uris=seeds,
             expanded_uris=(),
@@ -65,8 +87,14 @@ async def expand_experience_edges(
     hops_taken = 0
     truncated = False
     truncation_reason: str | None = None
+    tokens_used = 0
 
     def _over_deadline() -> bool:
+        if ctx is not None:
+            try:
+                ctx.check_deadline()
+            except DomainError:
+                return True
         return (time.perf_counter() - started) * 1000.0 >= caps.max_wall_time_ms
 
     for hop in range(1, caps.max_hops + 1):
@@ -91,7 +119,14 @@ async def expand_experience_edges(
                 truncated = True
                 truncation_reason = "deadline"
                 break
-            outgoing = await edges.find_active_by_source(source, identity=identity)
+            try:
+                outgoing = await _await_edges(
+                    edges.find_active_by_source(source, identity=identity)
+                )
+            except BudgetExhaustedError:
+                truncated = True
+                truncation_reason = "deadline"
+                break
             for edge, payload in outgoing:
                 edges_considered += 1
                 if edges_considered > caps.max_edges:
@@ -109,12 +144,13 @@ async def expand_experience_edges(
                 if not ok:
                     continue
 
-                # Token budget: approximate by counting activated payloads
-                if len(activated) >= caps.max_tokens:
+                cost = estimate_payload_tokens(payload)
+                if tokens_used + cost > caps.max_tokens:
                     truncated = True
                     truncation_reason = "max_tokens"
                     break
 
+                tokens_used += cost
                 activated.append(
                     ActivatedEdge(edge=edge, payload=payload, query_similarity=sim, hop=hop)
                 )

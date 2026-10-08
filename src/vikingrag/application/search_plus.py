@@ -174,6 +174,7 @@ class ExperienceAugmentedSearch:
             identity=identity,
             edges=self._edges,
             limits=self._limits,
+            ctx=context,
         )
 
         hits: list[ExpansionHit] = []
@@ -225,12 +226,23 @@ class ExperienceAugmentedSearch:
         )
 
 
-def build_search_plus(settings: Any, database: Any) -> ExperienceAugmentedSearch:
-    """Factory used by the answers router."""
+def build_search_plus(
+    settings: Any,
+    database: Any,
+    *,
+    search: SemanticSearchService | None = None,
+    embedding_provider: EmbeddingProvider | None = None,
+) -> ExperienceAugmentedSearch:
+    """Factory used by the answers router and SDK.
+
+    Prefer sharing an existing ``search`` / ``embedding_provider`` so the client
+    owns a single embedder lifecycle. When omitted, constructs local instances
+    (answers-router path).
+    """
     from vikingrag.providers.factory import build_embedding_provider, build_reranker
 
-    emb = build_embedding_provider(settings)
-    search = SemanticSearchService(
+    emb = embedding_provider or build_embedding_provider(settings)
+    owned_search = search or SemanticSearchService(
         database=database,
         embedding_provider=emb,
         retrieval_settings=settings.retrieval,
@@ -242,9 +254,11 @@ def build_search_plus(settings: Any, database: Any) -> ExperienceAugmentedSearch
         max_hops=settings.retrieval.experience_max_hops,
         max_nodes=getattr(settings.retrieval, "experience_max_nodes", 32),
         max_edges=settings.retrieval.experience_max_edges,
+        max_tokens=int(getattr(settings.retrieval, "experience_max_tokens", 4_000)),
+        max_wall_time_ms=int(getattr(settings.retrieval, "max_wall_time_ms", 5_000)),
     )
     return ExperienceAugmentedSearch(
-        search=search,
+        search=owned_search,
         edge_repo_factory=SqlExperienceEdgeRepository,
         embedding_provider=emb,
         limits=limits,

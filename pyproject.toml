@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vikingrag"
-version = "0.4.3"
+version = "0.4.4"
 description = "Production hierarchical RAG: structure-aware Search, agentic retrieval, experience edges"
 readme = "README.md"
 requires-python = ">=3.12"

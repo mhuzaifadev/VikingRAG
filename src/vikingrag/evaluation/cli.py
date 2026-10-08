@@ -65,6 +65,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     from vikingrag.evaluation.runner import (
         DEFAULT_EVAL_METHODS,
+        ManifestValidationError,
         load_examples_from_manifest,
         resolve_methods,
         run_evaluation,
@@ -81,7 +82,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if not path.is_file():
         print(f"manifest not found: {path}", file=sys.stderr)
         return 1
-    examples = load_examples_from_manifest(path)
+    try:
+        examples = load_examples_from_manifest(path)
+    except ManifestValidationError as exc:
+        print(f"manifest_invalid: {exc}", file=sys.stderr)
+        return 2
     if not examples:
         print("manifest has no usable examples", file=sys.stderr)
         return 1
@@ -120,14 +125,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
     out = Path(args.output) if args.output else None
     payload = json.dumps(report_obj.to_dict(), indent=2) + "\n"
     scores = report_obj.measured_scores
+    status = str(report_obj.status)
     if out:
         out.write_text(payload, encoding="utf-8")
         print(
-            f"wrote={out} status={report_obj.status} "
-            f"measured_scores={'set' if scores is not None else 'null'}"
+            f"wrote={out} status={status} measured_scores={'set' if scores is not None else 'null'}"
         )
     else:
         print(payload, end="")
+    if status in {"failed", "partial"}:
+        return 1
     return 0
 
 

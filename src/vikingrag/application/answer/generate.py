@@ -12,6 +12,7 @@ from vikingrag.application.grep_primitive import GrepService
 from vikingrag.application.list_primitive import ListService
 from vikingrag.application.read_primitive import ReadService
 from vikingrag.application.search import SemanticSearchService
+from vikingrag.domain.errors import NotImplementedCapabilityError
 from vikingrag.domain.models.answer import (
     AnswerCitation,
     AnswerRequest,
@@ -130,6 +131,12 @@ class AnswerGenerator:
         use_plus = mode in {ExecutionMode.VIKINGRAG_E, ExecutionMode.VIKINGRAG_E_PLUS}
         route = "agentic"
         escalation_reason: str | None = None
+
+        if use_plus and self._search_plus is None:
+            raise NotImplementedCapabilityError(
+                f"search_plus (required for execution_mode={mode.value}; "
+                "refusing silent fallback to ordinary Search)"
+            )
 
         scoped = intersect_document_scope(permitted_document_ids, request.document_ids)
         context = ctx or RetrievalContext.create(

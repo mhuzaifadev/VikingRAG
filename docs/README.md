@@ -16,7 +16,7 @@ Contributor invariants: [`AGENTS.md`](../AGENTS.md).
 
 ## Current release
 
-**`0.4.3`** on PyPI as [`vikingrag`](https://pypi.org/project/vikingrag/):
+**`0.4.4`** on PyPI as [`vikingrag`](https://pypi.org/project/vikingrag/):
 
 ```bash
 pip install -U vikingrag

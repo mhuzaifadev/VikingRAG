@@ -10,7 +10,7 @@ Example::
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from vikingrag.application.answer.generate import AnswerGenerator
@@ -19,8 +19,10 @@ from vikingrag.application.list_primitive import ListService
 from vikingrag.application.read_primitive import ReadService
 from vikingrag.application.search import SemanticSearchService
 from vikingrag.domain.errors import NotImplementedCapabilityError
+from vikingrag.domain.models.answer import ExecutionMode
 from vikingrag.infrastructure.database.engine import Database, create_database
 from vikingrag.infrastructure.object_store.factory import build_object_store
+from vikingrag.observability.logging import get_logger
 from vikingrag.providers.embeddings.base import EmbeddingProvider
 from vikingrag.providers.factory import (
     build_embedding_provider,
@@ -29,6 +31,8 @@ from vikingrag.providers.factory import (
 )
 from vikingrag.providers.llm.base import LLMProvider
 from vikingrag.settings.config import Settings, get_settings
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -45,7 +49,9 @@ class VikingRAGClient:
     grep_service: GrepService
     read_service: ReadService
     search_plus: Any | None = None
+    search_plus_error: str | None = None
     _owns_database: bool = False
+    _closed: bool = field(default=False, init=False, repr=False)
 
     @classmethod
     def from_settings(cls, settings: Settings | None = None) -> VikingRAGClient:
@@ -67,11 +73,19 @@ class VikingRAGClient:
             reranker=reranker,
         )
         search_plus = None
+        search_plus_error: str | None = None
         try:
             from vikingrag.application.search_plus import build_search_plus
 
-            search_plus = build_search_plus(cfg, database)
-        except Exception:
+            search_plus = build_search_plus(
+                cfg,
+                database,
+                search=search,
+                embedding_provider=embedding,
+            )
+        except Exception as exc:
+            search_plus_error = f"{type(exc).__name__}: {exc}"
+            logger.warning("search_plus_unavailable", error=search_plus_error)
             search_plus = None
         return cls(
             settings=cfg,
@@ -84,7 +98,23 @@ class VikingRAGClient:
             grep_service=GrepService(database=database),
             read_service=ReadService(database=database),
             search_plus=search_plus,
+            search_plus_error=search_plus_error,
             _owns_database=True,
+        )
+
+    def require_search_plus(self, mode: ExecutionMode | str) -> Any:
+        """Return Search+ or raise — never silently degrade E/E+ to ordinary Search."""
+        mode_value = mode.value if isinstance(mode, ExecutionMode) else str(mode)
+        if mode_value not in {
+            ExecutionMode.VIKINGRAG_E.value,
+            ExecutionMode.VIKINGRAG_E_PLUS.value,
+        }:
+            return self.search_plus
+        if self.search_plus is not None:
+            return self.search_plus
+        detail = self.search_plus_error or "Search+ was not constructed"
+        raise NotImplementedCapabilityError(
+            f"search_plus (required for execution_mode={mode_value}): {detail}"
         )
 
     def answer_generator(self) -> AnswerGenerator:
@@ -102,9 +132,13 @@ class VikingRAGClient:
         )
 
     async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         close = getattr(self.llm, "aclose", None)
         if close is not None:
             await close()
+        # Search+ reuses the same embedding provider; close once via self.embedding.
         close_e = getattr(self.embedding, "aclose", None)
         if close_e is not None:
             await close_e()

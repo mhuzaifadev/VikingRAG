@@ -21,11 +21,14 @@ from vikingrag.application.read_primitive import ReadService
 from vikingrag.application.search import SemanticSearchService
 from vikingrag.domain.models.answer import AnswerRequest, ExecutionMode
 from vikingrag.domain.models.document import DocumentId
+from vikingrag.observability.logging import get_logger
 from vikingrag.providers.factory import (
     build_embedding_provider,
     build_llm_provider,
     build_reranker,
 )
+
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/v1",
@@ -60,36 +63,38 @@ def _search_service(request: Request) -> SemanticSearchService:
     )
 
 
-def _maybe_search_plus(request: Request) -> Any | None:
-    """Prefer Search+ hook when application/search_plus exists."""
+def _maybe_search_plus(request: Request, *, search: Any) -> Any | None:
+    """Build Search+ sharing the request's search/embedder; log failures explicitly."""
     try:
         mod = import_module("vikingrag.application.search_plus")
     except ModuleNotFoundError:
         return None
-    factory = getattr(mod, "build_search_plus", None) or getattr(mod, "SearchPlusService", None)
-    if factory is None:
+    factory = getattr(mod, "build_search_plus", None)
+    if factory is None or not callable(factory):
         return None
     try:
-        if callable(factory) and getattr(factory, "__name__", "") == "build_search_plus":
-            return factory(request.app.state.settings, request.app.state.database)
         return factory(
-            database=request.app.state.database,
-            settings=request.app.state.settings,
+            request.app.state.settings,
+            request.app.state.database,
+            search=search,
+            embedding_provider=_embedding_provider(request),
         )
-    except (TypeError, Exception):
+    except Exception as exc:
+        logger.warning("search_plus_unavailable", error=f"{type(exc).__name__}: {exc}")
         return None
 
 
 def _answer_generator(request: Request) -> AnswerGenerator:
     settings = request.app.state.settings
+    search = _search_service(request)
     return AnswerGenerator(
         llm=_llm_provider(request),
-        search=_search_service(request),
+        search=search,
         list_service=ListService(database=request.app.state.database),
         grep_service=GrepService(database=request.app.state.database),
         read_service=ReadService(database=request.app.state.database),
         settings=settings,
-        search_plus=_maybe_search_plus(request),
+        search_plus=_maybe_search_plus(request, search=search),
         database=request.app.state.database,
     )
 

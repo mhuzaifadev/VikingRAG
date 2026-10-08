@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.4
+
+Correctness hotfix for confirmed release risks. Controlled learning policies, full SDK workflow, replayable traces, and measured benchmarks remain **deferred to v0.5.0** (see `docs/VikingRAG-official-comparison-v0.5.0-plan.md`).
+
+### Fixed
+
+- Eval manifests: malformed `document_ids` raise before provider/DB work (never silently become unrestricted)
+- Eval run status: `failed` / `partial` / `completed` / `completed_unjudged`; CLI exits nonzero on `failed` or `partial`
+- Experience expansion: `max_tokens` charges approximate payload text tokens; edge I/O honors `RetrievalContext` deadline
+- Search+: SDK/API share the primary embedding provider; E/E+ raise explicitly when Search+ is unavailable (no silent ordinary-Search fallback); `aclose` is idempotent
+
 ## v0.4.3
 
 Learning-trace, eval-mode, and warm-up corpus-safety release. Performance and paper-table quality remain **unmeasured** in this repo until you run them.

@@ -19,9 +19,13 @@ from vikingrag.evaluation.runner import (
     DEFAULT_EVAL_METHODS,
     VIKINGRAG_METHOD_MODES,
     EvalExample,
+    ManifestValidationError,
+    MethodResult,
     build_vikingrag_methods,
     citation_validity_metrics,
+    execution_status,
     load_examples_from_manifest,
+    parse_document_ids,
     resolve_methods,
     run_evaluation,
 )
@@ -119,8 +123,6 @@ async def test_echo_only_without_client() -> None:
 
 
 def test_citation_validity_metrics_handles_errors() -> None:
-    from vikingrag.evaluation.runner import MethodResult
-
     metrics = citation_validity_metrics(
         [
             MethodResult(
@@ -142,3 +144,66 @@ def test_citation_validity_metrics_handles_errors() -> None:
     assert metrics["vikingrag"]["n"] == 2
     assert metrics["vikingrag"]["error_rate"] == 0.5
     assert metrics["vikingrag"]["non_empty_answer_rate"] == 1.0
+
+
+def test_malformed_document_ids_fail_closed() -> None:
+    with pytest.raises(ManifestValidationError, match="invalid-document-id"):
+        parse_document_ids(("invalid-document-id",), field="document_ids")
+    # Never silently become unrestricted empty tuple via skip.
+    with pytest.raises(ManifestValidationError):
+        parse_document_ids(("not-a-uuid", "also-bad"))
+
+
+def test_manifest_rejects_malformed_document_ids(tmp_path: Path) -> None:
+    path = tmp_path / "bad.json"
+    path.write_text(
+        json.dumps(
+            {
+                "examples": [
+                    {
+                        "id": "q1",
+                        "question": "What is the fee?",
+                        "document_ids": ["invalid-document-id"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ManifestValidationError, match="q1"):
+        load_examples_from_manifest(path)
+
+
+@pytest.mark.asyncio
+async def test_all_error_run_is_failed() -> None:
+    async def _boom(question: str, *, document_ids: tuple[str, ...] = ()) -> Any:
+        del question, document_ids
+        raise RuntimeError("provider down")
+
+    report = await run_evaluation(
+        examples=[EvalExample(example_id="q0", question="hi")],
+        methods={"vikingrag": _boom},
+        judge="scripted",
+    )
+    assert report.status == "failed"
+    assert report.measured_scores is not None
+    assert report.measured_scores["vikingrag"]["error_rate"] == 1.0
+    assert execution_status(report.results, judged=True) == "failed"
+
+
+@pytest.mark.asyncio
+async def test_partial_run_status() -> None:
+    async def _ok(question: str, *, document_ids: tuple[str, ...] = ()) -> dict[str, object]:
+        del document_ids
+        return {"answer": f"a:{question}", "citations": ("u",), "usage": {}}
+
+    async def _boom(question: str, *, document_ids: tuple[str, ...] = ()) -> Any:
+        del question, document_ids
+        raise RuntimeError("fail")
+
+    report = await run_evaluation(
+        examples=[EvalExample(example_id="q0", question="hi")],
+        methods={"ok": _ok, "bad": _boom},
+        judge="scripted",
+    )
+    assert report.status == "partial"

@@ -235,6 +235,7 @@ class RetrievalSettings(BaseSettings):
     experience_max_hops: int = 2
     experience_max_nodes: int = 32
     experience_max_edges: int = 64
+    experience_max_tokens: int = 4_000
     experience_max_support: int = 16
     finalization_llm_reserve: int = 1
 
@@ -254,6 +255,7 @@ class RetrievalSettings(BaseSettings):
         "experience_max_hops",
         "experience_max_nodes",
         "experience_max_edges",
+        "experience_max_tokens",
         "experience_max_support",
     )
     @classmethod

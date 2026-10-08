@@ -13,6 +13,10 @@ from vikingrag.domain.models.answer import AnswerRequest, AnswerResponse, Execut
 from vikingrag.domain.models.document import DocumentId
 
 
+class ManifestValidationError(ValueError):
+    """Malformed explicit scope or examples — fail before provider/DB work."""
+
+
 @dataclass(frozen=True, slots=True)
 class EvalExample:
     example_id: str
@@ -34,7 +38,7 @@ class MethodResult:
 
 @dataclass(slots=True)
 class EvalRunReport:
-    status: str  # completed_unjudged | completed | blocked
+    status: str  # completed_unjudged | completed | partial | failed | blocked
     methods: tuple[str, ...]
     results: list[MethodResult]
     measured_scores: dict[str, Any] | None
@@ -63,14 +67,35 @@ VIKINGRAG_METHOD_MODES: dict[str, ExecutionMode] = {
 DEFAULT_EVAL_METHODS: tuple[str, ...] = tuple(VIKINGRAG_METHOD_MODES.keys())
 
 
-def _parse_document_ids(raw: tuple[str, ...]) -> tuple[DocumentId, ...]:
+def parse_document_ids(
+    raw: tuple[str, ...] | list[str],
+    *,
+    field: str = "document_ids",
+    example_id: str | None = None,
+) -> tuple[DocumentId, ...]:
+    """Parse document UUIDs; reject malformed entries (never silently drop to unrestricted)."""
     out: list[DocumentId] = []
     for value in raw:
+        text = str(value).strip()
+        if not text:
+            where = f"example {example_id!r} " if example_id else ""
+            raise ManifestValidationError(
+                f"Empty {where}{field} entry is invalid; refusing unrestricted fallback"
+            )
         try:
-            out.append(DocumentId(UUID(str(value))))
-        except (ValueError, TypeError):
-            continue
+            out.append(DocumentId(UUID(text)))
+        except (ValueError, TypeError) as exc:
+            where = f"example {example_id!r} " if example_id else ""
+            raise ManifestValidationError(
+                f"Malformed {where}{field} value {text!r}: expected UUID. "
+                "Refusing to broaden scope to unrestricted retrieval."
+            ) from exc
     return tuple(out)
+
+
+# Back-compat alias used by older call sites / tests.
+def _parse_document_ids(raw: tuple[str, ...]) -> tuple[DocumentId, ...]:
+    return parse_document_ids(raw)
 
 
 def build_vikingrag_methods(client: Any) -> dict[str, AnswerCallable]:
@@ -83,7 +108,7 @@ def build_vikingrag_methods(client: Any) -> dict[str, AnswerCallable]:
             resp = await generator.generate(
                 AnswerRequest(
                     question=question,
-                    document_ids=_parse_document_ids(document_ids),
+                    document_ids=parse_document_ids(document_ids, field="document_ids"),
                     execution_mode=mode,
                 )
             )
@@ -174,11 +199,23 @@ def citation_validity_metrics(results: list[MethodResult]) -> dict[str, Any]:
     return scores
 
 
+def execution_status(results: list[MethodResult], *, judged: bool) -> str:
+    """Derive run status from method outcomes (separate from quality metrics)."""
+    if not results:
+        return "failed"
+    errors = sum(1 for r in results if r.error)
+    if errors == len(results):
+        return "failed"
+    if errors > 0:
+        return "partial"
+    return "completed" if judged else "completed_unjudged"
+
+
 def load_examples_from_manifest(path: Path) -> list[EvalExample]:
     data = json.loads(path.read_text(encoding="utf-8"))
     raw = data.get("examples") or data.get("questions") or []
     if not isinstance(raw, list):
-        raise ValueError("manifest examples must be a list")
+        raise ManifestValidationError("manifest examples must be a list")
     out: list[EvalExample] = []
     for i, item in enumerate(raw):
         if isinstance(item, str):
@@ -189,12 +226,17 @@ def load_examples_from_manifest(path: Path) -> list[EvalExample]:
         q = str(item.get("question") or item.get("query") or "").strip()
         if not q:
             continue
+        example_id = str(item.get("id") or f"q{i}")
+        raw_ids = tuple(str(x) for x in (item.get("document_ids") or ()))
+        # Validate before any provider/DB work; keep string form on the example.
+        if raw_ids:
+            parse_document_ids(raw_ids, field="document_ids", example_id=example_id)
         out.append(
             EvalExample(
-                example_id=str(item.get("id") or f"q{i}"),
+                example_id=example_id,
                 question=q,
                 gold_answer=(str(item["gold"]) if item.get("gold") else None),
-                document_ids=tuple(str(x) for x in (item.get("document_ids") or ())),
+                document_ids=raw_ids,
             )
         )
     return out
@@ -211,6 +253,11 @@ async def run_evaluation(
     ``judge="scripted"`` computes deterministic citation/non-empty rates into
     ``measured_scores``. Anything else leaves scores null (no invented LLM accuracy).
     """
+    # Re-validate scopes before any method call (defense in depth).
+    for ex in examples:
+        if ex.document_ids:
+            parse_document_ids(ex.document_ids, field="document_ids", example_id=ex.example_id)
+
     results: list[MethodResult] = []
     for name, fn in methods.items():
         for ex in examples:
@@ -248,26 +295,25 @@ async def run_evaluation(
                 )
 
     judge_key = (judge or "").strip().lower()
-    if judge_key in {"scripted", "citation", "deterministic"}:
-        measured = citation_validity_metrics(results)
-        return EvalRunReport(
-            status="completed",
-            methods=tuple(methods.keys()),
-            results=results,
-            measured_scores=measured,
-            notes=(
-                "Deterministic citation_presence_rate / non_empty_answer_rate only. "
-                "Not LLM answer accuracy."
-            ),
+    judged = judge_key in {"scripted", "citation", "deterministic"}
+    status = execution_status(results, judged=judged)
+    measured = citation_validity_metrics(results) if judged else None
+    if judged:
+        notes = (
+            "Deterministic citation_presence_rate / non_empty_answer_rate only. "
+            "Not LLM answer accuracy. "
+            f"execution_status={status}."
         )
-
+    else:
+        notes = (
+            "Answers recorded with latency/usage/citation_count. "
+            "measured_scores is null until --judge scripted (or equivalent) is set. "
+            f"execution_status={status}."
+        )
     return EvalRunReport(
-        status="completed_unjudged",
+        status=status,
         methods=tuple(methods.keys()),
         results=results,
-        measured_scores=None,
-        notes=(
-            "Answers recorded with latency/usage/citation_count. "
-            "measured_scores is null until --judge scripted (or equivalent) is set."
-        ),
+        measured_scores=measured,
+        notes=notes,
     )
