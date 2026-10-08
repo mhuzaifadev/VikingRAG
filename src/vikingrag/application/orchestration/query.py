@@ -48,6 +48,7 @@ class QueryRequest:
     document_ids: tuple[DocumentId, ...] = ()
     top_k: int = 8
     max_reads: int = 8
+    instructions: str | None = None
 
 
 @dataclass(slots=True)
@@ -59,9 +60,13 @@ class QueryResponse:
     evidence: EvidenceBundle
     assessment: EvidenceAssessment | None = None
     answer: str | None = None
+    citations: tuple[Any, ...] = ()
     gaps: tuple[str, ...] = ()
     query_run_id: object | None = None
     cold_path: bool = False
+    usage: dict[str, Any] = field(default_factory=dict)
+    trace_events: tuple[dict[str, Any], ...] = ()
+    agent_status: Any | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -121,6 +126,7 @@ class QueryOrchestrator:
             mode=request.mode,
             use_search_plus=use_search_plus,
             ctx=ctx,
+            instructions=request.instructions,
         )
         return QueryResponse(
             query=request.query,
@@ -129,7 +135,11 @@ class QueryOrchestrator:
             status=QueryRunStatus.SUCCEEDED,
             evidence=result.evidence,
             answer=result.answer,
+            citations=tuple(result.citations),
             gaps=result.gaps,
+            usage=dict(result.usage),
+            trace_events=tuple(result.events),
+            agent_status=result.status,
             metadata={"rounds": result.rounds, "tool_calls": result.tool_calls},
         )
 
@@ -164,9 +174,13 @@ class QueryOrchestrator:
 
         assessment: EvidenceAssessment | None = None
         candidate_answer: str | None = None
+        citations: list[Any] = []
         candidate_meta: dict[str, Any] = {}
 
-        # Section 5: draft candidate A, then constraint-aware strict sufficiency.
+        def _usage() -> dict[str, Any]:
+            return dict(context.usage.snapshot())
+
+        # Section 5: draft candidate A, then claim-aware strict sufficiency.
         if self._assessor is None:
             gaps: tuple[str, ...] = ("assessor_unavailable",)
         elif not evidence.items:
@@ -184,9 +198,11 @@ class QueryOrchestrator:
                     evidence=evidence,
                     assessment=assessment,
                     answer=None,
+                    citations=(),
                     gaps=(),
                     query_run_id=run_id,
                     cold_path=plus.cold_path,
+                    usage=_usage(),
                     metadata={
                         "search_plus": True,
                         "trace_events": len(trace.events),
@@ -204,7 +220,12 @@ class QueryOrchestrator:
                 ctx=context,
                 model=self._llm_model,
             )
-            assessment = await self._assessor.assess(request.query, evidence, ctx=context)
+            assessment = await self._assessor.assess(
+                request.query,
+                evidence,
+                ctx=context,
+                candidate_answer=candidate_answer,
+            )
             citations_ok = bool(citations) and citation_uris_subset_of_evidence(citations, evidence)
             if (
                 candidate_answer
@@ -219,9 +240,11 @@ class QueryOrchestrator:
                     evidence=evidence,
                     assessment=assessment,
                     answer=candidate_answer,
+                    citations=tuple(citations),
                     gaps=(),
                     query_run_id=run_id,
                     cold_path=plus.cold_path,
+                    usage=_usage(),
                     metadata={
                         "search_plus": True,
                         "trace_events": len(trace.events),
@@ -245,6 +268,7 @@ class QueryOrchestrator:
                 gaps=gaps,
                 use_search_plus=True,
                 ctx=context,
+                instructions=request.instructions,
             )
             return QueryResponse(
                 query=request.query,
@@ -254,13 +278,19 @@ class QueryOrchestrator:
                 evidence=agent_result.evidence,
                 assessment=assessment,
                 answer=agent_result.answer,
+                citations=tuple(agent_result.citations),
                 gaps=agent_result.gaps or gaps,
                 query_run_id=run_id,
                 cold_path=plus.cold_path,
+                usage=dict(agent_result.usage) or _usage(),
+                trace_events=tuple(agent_result.events),
+                agent_status=agent_result.status,
                 metadata={
                     "fallback": "algorithm_1",
                     "gaps": list(gaps),
                     "candidate": candidate_meta,
+                    "rounds": agent_result.rounds,
+                    "tool_calls": agent_result.tool_calls,
                 },
             )
         except NotImplementedCapabilityError:
@@ -271,9 +301,11 @@ class QueryOrchestrator:
                 status=QueryRunStatus.ABSTAINED,
                 evidence=evidence,
                 assessment=assessment,
+                citations=tuple(citations),
                 gaps=gaps,
                 query_run_id=run_id,
                 cold_path=plus.cold_path,
+                usage=_usage(),
                 metadata={
                     "fallback": "algorithm_1_stub",
                     "gaps": list(gaps),

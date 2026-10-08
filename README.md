@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/mhuzaifadev/VikingRAG">
-    <img src="https://img.shields.io/badge/VikingRAG-0.4.1-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.4.1" />
+    <img src="https://img.shields.io/badge/VikingRAG-0.4.2-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.4.2" />
   </a>
 </p>
 
@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.4.1"><img src="https://img.shields.io/badge/release-v0.4.1-blue?logo=github" alt="Release v0.4.1" /></a>
+  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.4.2"><img src="https://img.shields.io/badge/release-v0.4.2-blue?logo=github" alt="Release v0.4.2" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?logo=apache" alt="Apache 2.0" /></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+" /></a>
   <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white" alt="FastAPI" /></a>
@@ -75,7 +75,7 @@ Classic RAG often flattens documents into unrelated chunks. **Structure is lost*
 
 **VikingRAG** (Gao et al., 2026) showed that hierarchy-preserving storage, multi-granular indexing, evidence-gap tools (`Search` / `List` / `Grep` / `Read`), and adaptive escalation can improve accuracy **while cutting tokens**.
 
-This project turns those ideas into a production-ready stack:
+This project turns those ideas into a **production-oriented** stack:
 
 | Research idea | This repo today |
 |---|---|
@@ -85,18 +85,24 @@ This project turns those ideas into a production-ready stack:
 | Cheap path / agents | Algorithm 1 agentic loop; E+ one-round fast path then escalate |
 | Evidence-first grounding | Authoritative Reads, citations, `POST /v1/answers` |
 | Experience edges | Algorithm 2 construction + Algorithm 3 Search+ (γ-gated) |
-| Production constraints | Auth allowlist, migrations, prod Compose, eval smoke, typed settings |
+| Operational constraints | Auth allowlist, migrations, prod Compose, eval smoke, typed settings |
 
 > **Independent implementation** inspired by the paper - not a fork of the AGPL research artifacts.
 
-<!-- Optional: add comparison-tokens.png / comparison-accuracy.png under docs/assets/ then uncomment
 <p align="center">
-  <img src="docs/assets/comparison-tokens.png" alt="Token cost vs baselines" width="720" />
+  <img src="docs/assets/comparison-tokens.png" alt="Paper Table 3: token cost vs highest-accuracy baseline" width="720" />
 </p>
 <p align="center">
-  <img src="docs/assets/comparison-accuracy.png" alt="Accuracy vs baselines" width="720" />
+  <img src="docs/assets/comparison-accuracy.png" alt="Paper Table 3: VikingRAG-E+ token ratios vs gold/silver baselines" width="720" />
 </p>
--->
+
+<p align="center">
+  <sub>
+    Charts redrawn from <a href="https://arxiv.org/abs/2609.11390">Gao et al., arXiv:2609.11390</a> Table&nbsp;3 / abstract.
+    <strong>Paper experiments — not measurements from this repository.</strong>
+    Regenerate: <code>uv run python scripts/render_paper_comparison_charts.py</code>
+  </sub>
+</p>
 
 ---
 
@@ -116,35 +122,37 @@ You still need **Postgres + pgvector** and **Redis**, plus a `.env` (copy from t
 ```bash
 export VIKINGRAG_DATABASE_URL=postgresql+asyncpg://vikingrag:vikingrag@localhost:5432/vikingrag
 export VIKINGRAG_REDIS_URL=redis://localhost:6379/0
-export VIKINGRAG_LLM_PROVIDER=fake          # or openai / deepseek / gemini / anthropic
+# Offline wiring only (not semantic quality):
+export VIKINGRAG_LLM_PROVIDER=fake
 export VIKINGRAG_EMBEDDING_PROVIDER=deterministic
+# Real retrieval: openai | deepseek | gemini | anthropic (+ matching embeddings)
 
 vikingrag-migrate upgrade head
 vikingrag-api
 # API: http://localhost:8000/docs
 ```
 
-SDK:
-
-```python
-from vikingrag import VikingRAGClient
-client = VikingRAGClient.from_settings()
-```
-
-### Option B — Clone + uv (full stack / contributors)
+### Option B — Clone + Docker (API already on :8000)
 
 ```bash
 git clone https://github.com/mhuzaifadev/VikingRAG.git
 cd VikingRAG
 cp .env.example .env
 # Python 3.12+, https://docs.astral.sh/uv/
-make install && make docker-up && make migrate && make dev
+make install && make docker-up && make migrate
+# Compose already serves the API at http://localhost:8000 — do not also `make dev` (port conflict).
+```
+
+Host-only API with reload (when Compose API is **not** running):
+
+```bash
+make dev
 ```
 
 ### Option C — pip from GitHub (pre-release / specific tag)
 
 ```bash
-pip install "git+https://github.com/mhuzaifadev/VikingRAG.git@v0.4.1"
+pip install "git+https://github.com/mhuzaifadev/VikingRAG.git@v0.4.2"
 ```
 
 ### Option D — Docker Compose
@@ -291,7 +299,7 @@ curl -s http://localhost:8000/health/live  | jq
 curl -s http://localhost:8000/health/ready | jq
 ```
 
-Ingest a document, index it, and search (with `.env` defaults: `VIKINGRAG_LLM_PROVIDER=fake`, `VIKINGRAG_EMBEDDING_PROVIDER=deterministic`):
+Ingest a document, index it, and search. Defaults below are **offline wiring** (`fake` LLM + `deterministic` embeddings) — fine for API plumbing, not real semantic quality:
 
 ```bash
 curl -s -X POST http://localhost:8000/v1/documents \
@@ -320,23 +328,35 @@ Interactive API docs: [http://localhost:8000/docs](http://localhost:8000/docs) �
 
 ## SDK
 
+Embed VikingRAG in-process (no FastAPI server required). Still needs Postgres + Redis + env:
+
 ```python
 import asyncio
 from vikingrag import VikingRAGClient
+from vikingrag.domain.models.answer import AnswerRequest, ExecutionMode
+from vikingrag.domain.models.representation import SearchRequest
 
 async def main() -> None:
     client = VikingRAGClient.from_settings()
     try:
-        # hits = await client.search.search(...)
-        # answer = await client.answer_generator().generate(...)
-        pass
+        hits = await client.search.search(
+            SearchRequest(query="How do we verify retrieved evidence?", top_k=5)
+        )
+        print(len(hits.candidates), "hits")
+        answer = await client.answer_generator().generate(
+            AnswerRequest(
+                question="How do we verify retrieved evidence?",
+                execution_mode=ExecutionMode.VIKINGRAG,
+            )
+        )
+        print(answer.status, (answer.answer or "")[:200])
     finally:
         await client.aclose()
 
 asyncio.run(main())
 ```
 
-Providers via env: `VIKINGRAG_LLM_PROVIDER=openai|deepseek|gemini|anthropic|vllm` (and matching embeddings). Production rejects `fake` / `deterministic` / `scripted`.
+Providers via env: `VIKINGRAG_LLM_PROVIDER=openai|deepseek|gemini|anthropic|vllm` (and matching embeddings). Empty `VIKINGRAG_LLM_MODEL` uses the provider preset (e.g. Gemini → `gemini-2.5-flash`). Production rejects `fake` / `deterministic` / `scripted`.
 
 ---
 

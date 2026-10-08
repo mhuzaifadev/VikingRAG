@@ -294,6 +294,9 @@ class AgentRetrieveResult:
     rounds: int = 0
     tool_calls: int = 0
     answer: str | None = None
+    citations: list[AnswerCitation] = field(default_factory=list)
+    events: list[dict[str, Any]] = field(default_factory=list)
+    usage: dict[str, Any] = field(default_factory=dict)
     status: AnswerStatus = AnswerStatus.INSUFFICIENT_EVIDENCE
 
 
@@ -312,18 +315,53 @@ class AgenticRetrievalLoop:
         ctx: RetrievalContext | None = None,
         initial_evidence: Any = None,
         gaps: tuple[str, ...] = (),
+        instructions: str | None = None,
     ) -> AgentRetrieveResult:
-        del mode, use_search_plus, initial_evidence
-        result = await self._executor.run(query, ctx=ctx)
+        del mode, use_search_plus
+        gap_block = ""
+        if gaps:
+            gap_block = (
+                "Prior one-round retrieval was insufficient. "
+                f"Missing / unsupported aspects: {', '.join(gaps)}. "
+                "Focus tool use on closing these gaps."
+            )
+        evidence_block = ""
+        if initial_evidence is not None:
+            items = getattr(initial_evidence, "items", None) or []
+            if items:
+                previews = []
+                for ev in list(items)[:12]:
+                    uri = getattr(ev, "uri", None) or getattr(ev, "source_uri", "")
+                    text = (getattr(ev, "text", None) or getattr(ev, "content", "") or "")[:400]
+                    previews.append(f"- {uri}: {text}")
+                evidence_block = (
+                    "Initial evidence already collected (prefer Read of these URIs "
+                    "before broad Search):\n" + "\n".join(previews)
+                )
+        merged_instructions = "\n\n".join(
+            p for p in (instructions, gap_block, evidence_block) if p and str(p).strip()
+        )
+        result = await self._executor.run(
+            query,
+            ctx=ctx,
+            instructions=merged_instructions or None,
+        )
         from vikingrag.application.evidence_bundle import assemble_evidence_bundle
 
-        bundle = assemble_evidence_bundle(list(result.evidence), max_tokens=50_000)
+        # Prefer agent Reads; fall back to initial evidence if agent found nothing new.
+        evidence_list = list(result.evidence)
+        if not evidence_list and initial_evidence is not None:
+            evidence_list = list(getattr(initial_evidence, "items", []) or [])
+        bundle = assemble_evidence_bundle(evidence_list, max_tokens=50_000)
         return AgentRetrieveResult(
             evidence=bundle,
             gaps=gaps,
             rounds=result.rounds_used,
             tool_calls=result.usage.get("tool_calls", 0) if result.usage else 0,
             answer=result.answer,
+            citations=list(result.citations),
+            events=list(result.events),
+            usage=dict(result.usage),
             status=result.status,
         )
 

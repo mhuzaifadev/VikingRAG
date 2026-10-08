@@ -48,7 +48,7 @@ _LLM_PRESETS: dict[str, ProviderPreset] = {
         name="gemini",
         adapter="openai_compatible",
         default_base_url=_GEMINI_OPENAI_BASE,
-        default_model="gemini-2.0-flash",
+        default_model="gemini-2.5-flash",
     ),
     "anthropic": ProviderPreset(
         name="anthropic",

@@ -12,19 +12,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 
 from vikingrag.application.experience.support_select import build_support_selector
 from vikingrag.infrastructure.database.engine import create_database
 from vikingrag.observability.logging import configure_logging, get_logger
 from vikingrag.providers.factory import build_llm_provider
-from vikingrag.settings.config import get_settings
+from vikingrag.settings.config import clear_settings_cache, get_settings
 from vikingrag.workers.edge_builder import EdgeBuilderWorker
 
 logger = get_logger(__name__)
 
 
 async def _amain() -> None:
+    os.environ.setdefault("VIKINGRAG_APP_PROCESS_ROLE", "worker")
+    clear_settings_cache()
     settings = get_settings()
     configure_logging(level=settings.app.log_level, json_logs=settings.app.env != "development")
     database = create_database(settings.database)

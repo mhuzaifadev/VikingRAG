@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -11,7 +12,11 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from vikingrag.infrastructure.database.models import Base
-from vikingrag.settings.config import get_settings
+from vikingrag.settings.config import clear_settings_cache, get_settings
+
+# Migrations only need DB URL — skip production LLM/embedding checks.
+os.environ.setdefault("VIKINGRAG_APP_PROCESS_ROLE", "migrate")
+clear_settings_cache()
 
 config = context.config
 

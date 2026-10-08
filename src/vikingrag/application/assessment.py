@@ -44,6 +44,7 @@ class EvidenceAssessor(Protocol):
         bundle: EvidenceBundle,
         *,
         ctx: RetrievalContext | None = None,
+        candidate_answer: str | None = None,
     ) -> EvidenceAssessment: ...
 
 
@@ -158,8 +159,9 @@ class EmptyBundleAssessor:
         bundle: EvidenceBundle,
         *,
         ctx: RetrievalContext | None = None,
+        candidate_answer: str | None = None,
     ) -> EvidenceAssessment:
-        del ctx
+        del ctx, candidate_answer
         aspects = deterministic_aspects_from_query(query)
         support = tuple(
             AspectSupport(aspect_id=a.aspect_id, status=AspectSupportStatus.UNSUPPORTED)
@@ -211,8 +213,9 @@ class ScriptedEvidenceAssessor:
         bundle: EvidenceBundle,
         *,
         ctx: RetrievalContext | None = None,
+        candidate_answer: str | None = None,
     ) -> EvidenceAssessment:
-        del ctx
+        del ctx, candidate_answer
         if self._fail:
             raise AssessmentValidationError("scripted assessor failure")
         if not bundle.items:
@@ -317,6 +320,7 @@ class LLMEvidenceAssessor:
         bundle: EvidenceBundle,
         *,
         ctx: RetrievalContext | None = None,
+        candidate_answer: str | None = None,
     ) -> EvidenceAssessment:
         context = ctx or RetrievalContext.create()
         if not bundle.items:
@@ -333,7 +337,11 @@ class LLMEvidenceAssessor:
                 await context.reserve(provider_attempts=1)
                 context.check_deadline()
                 prompt = _build_assessment_prompt(
-                    query, aspects, visible_bundle, truncation_notes=truncation_notes
+                    query,
+                    aspects,
+                    visible_bundle,
+                    truncation_notes=truncation_notes,
+                    candidate_answer=candidate_answer,
                 )
                 response = await context.await_with_deadline(
                     self._llm.generate(
@@ -512,6 +520,7 @@ def _build_assessment_prompt(
     bundle: EvidenceBundle,
     *,
     truncation_notes: tuple[str, ...] = (),
+    candidate_answer: str | None = None,
 ) -> str:
     evidence_lines = []
     for item in bundle.items:
@@ -521,17 +530,26 @@ def _build_assessment_prompt(
     trunc_block = ""
     if truncation_notes:
         trunc_block = "\n\nVisibility notes:\n" + "\n".join(truncation_notes)
+    candidate_block = ""
+    if candidate_answer and candidate_answer.strip():
+        candidate_block = (
+            "\n\nCandidate answer (validate every claim against evidence; "
+            "unsupported claims ⇒ insufficient):\n"
+            f"{candidate_answer.strip()}\n"
+        )
     return (
         f"Query:\n{query}\n\n"
         f"Required aspects / constraints (query-derived; kinds may include "
         f"{', '.join(CONSTRAINT_KINDS)}):\n"
         + "\n".join(aspect_lines)
+        + candidate_block
         + "\n\nEvidence (cite by evidence_id only; quotes must appear in visible text):\n"
         + "\n\n".join(evidence_lines)
         + trunc_block
         + "\n\nStrict sufficiency: mark an aspect supported only when evidence "
         "directly answers that constraint. Related but non-answering text is "
-        "unsupported or partial.\n"
+        "unsupported or partial. If a candidate answer is present, every factual "
+        "claim in it must be supported by cited evidence.\n"
         "Return JSON with keys: aspect_support (list of "
         "{aspect_id, status, references:[{evidence_id, quote, explanation}]}), "
         "conflicts (list of strings), reason_codes (list), "

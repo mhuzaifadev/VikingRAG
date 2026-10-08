@@ -40,8 +40,15 @@ def _alembic_config() -> Any:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import os
+
     from alembic import command
     from alembic.config import Config
+
+    from vikingrag.settings.config import clear_settings_cache
+
+    os.environ.setdefault("VIKINGRAG_APP_PROCESS_ROLE", "migrate")
+    clear_settings_cache()
 
     parser = argparse.ArgumentParser(
         prog="vikingrag-migrate",

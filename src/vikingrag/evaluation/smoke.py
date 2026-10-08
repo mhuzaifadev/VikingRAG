@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from importlib import resources
 from pathlib import Path
 
 from vikingrag.ingestion.parsers.markdown import MarkdownDocumentParser
@@ -48,10 +49,31 @@ class SmokeReport:
         }
 
 
+def _packaged_fixture_bytes() -> tuple[bytes, str] | None:
+    try:
+        pkg = resources.files("vikingrag.evaluation.fixtures")
+        packaged = pkg.joinpath("system_architecture.md")
+        if packaged.is_file():
+            return packaged.read_bytes(), "vikingrag.evaluation.fixtures/system_architecture.md"
+    except (TypeError, FileNotFoundError, ModuleNotFoundError, AttributeError):
+        return None
+    return None
+
+
 def default_fixture_path() -> Path:
-    """Resolve packaged fixture: prefer repo tests/fixtures, else package-adjacent."""
+    """Prefer packaged wheel resource (copied to temp), then repo ``tests/fixtures``."""
+    packaged = _packaged_fixture_bytes()
+    if packaged is not None:
+        import tempfile
+
+        raw, _label = packaged
+        tmp = Path(tempfile.gettempdir()) / "vikingrag_smoke_system_architecture.md"
+        tmp.write_bytes(raw)
+        return tmp
+
     here = Path(__file__).resolve()
     candidates = [
+        here.parent / "fixtures" / "system_architecture.md",
         here.parents[3] / "tests" / "fixtures" / "system_architecture.md",
         here.parents[4] / "tests" / "fixtures" / "system_architecture.md",
         Path.cwd() / "tests" / "fixtures" / "system_architecture.md",
@@ -60,20 +82,31 @@ def default_fixture_path() -> Path:
         if path.is_file():
             return path
     raise FileNotFoundError(
-        "Offline smoke fixture tests/fixtures/system_architecture.md not found; "
-        "run from the repository root or install the source tree."
+        "Offline smoke fixture system_architecture.md not found in package or "
+        "tests/fixtures/. Reinstall vikingrag or run from the repository root."
     )
 
 
 def run_offline_smoke(*, fixture: Path | None = None) -> SmokeReport:
-    path = fixture or default_fixture_path()
-    raw = path.read_bytes()
+    if fixture is not None:
+        path = fixture
+        raw = path.read_bytes()
+        path_label = str(path)
+    else:
+        packaged = _packaged_fixture_bytes()
+        if packaged is not None:
+            raw, path_label = packaged
+            path = Path(path_label)
+        else:
+            path = default_fixture_path()
+            raw = path.read_bytes()
+            path_label = str(path)
     digest = hashlib.sha256(raw).hexdigest()
     checks: list[SmokeCheck] = []
 
     parser = MarkdownDocumentParser()
     try:
-        parsed = parser.parse(raw, filename=path.name, mime_type="text/markdown")
+        parsed = parser.parse(raw, filename="system_architecture.md", mime_type="text/markdown")
         checks.append(
             SmokeCheck(
                 name="parse_fixture",
@@ -86,7 +119,7 @@ def run_offline_smoke(*, fixture: Path | None = None) -> SmokeReport:
         return SmokeReport(
             status="failed",
             label="smoke",
-            fixture_path=str(path),
+            fixture_path=path_label,
             fixture_sha256=digest,
             checks=tuple(checks),
             notes="Parse failed; no scores produced.",
@@ -102,10 +135,8 @@ def run_offline_smoke(*, fixture: Path | None = None) -> SmokeReport:
                 detail=("support span present in fixture" if found else "missing support span"),
             )
         )
-        # Document the query used for scaffolding integrity only
         _ = query
 
-    # Structural headings expected in the syllabus-like fixture
     for heading in ("PostgreSQL", "Semantic Search", "Evidence Verification"):
         ok = heading in text
         checks.append(
@@ -120,7 +151,7 @@ def run_offline_smoke(*, fixture: Path | None = None) -> SmokeReport:
     return SmokeReport(
         status="ok" if all_ok else "failed",
         label="smoke",
-        fixture_path=str(path),
+        fixture_path=path_label,
         fixture_sha256=digest,
         checks=tuple(checks),
         notes=(

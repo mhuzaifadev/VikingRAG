@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.4.2
+
+Correctness hotfix after PyPI `0.4.1` review (scope, E+, Compose, packaging).
+
+### Fixed
+
+- Answer modes honor `document_ids` (intersect with auth allowlist across Search/List/Grep/Read)
+- E+ no longer runs Algorithm 1 twice on escalation; `initial_evidence` / gaps / instructions are carried
+- E+ one-round path returns citations + usage and enqueues experience learning
+- Search+ traces emit separate `SEARCH` vs `EDGE_EXPAND` events for Algorithm 2
+- E+ assessor receives the candidate answer for claim-aware sufficiency
+- Production Compose: migrate/worker process roles; allowlist `*` = unrestricted; model/base-URL env forwarded
+- Provider model defaults follow presets when `VIKINGRAG_LLM_MODEL` is empty (Gemini → `gemini-2.5-flash`)
+- Wheel ships offline smoke fixture; CI installs the wheel outside the repo
+
+### Added
+
+- Executable warm-up when corpus + LLM are present; `vikingrag-eval run --manifest` records unjudged results
+
+### Changed
+
+- README: production-oriented wording; Docker vs `make dev` split; working SDK example
+
 ## v0.4.1
 
 Docs and packaging polish after the first PyPI publish of `vikingrag`.

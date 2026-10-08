@@ -12,6 +12,7 @@ from vikingrag.application.list_primitive import ListService
 from vikingrag.application.read_primitive import ReadService
 from vikingrag.application.search import SemanticSearchService
 from vikingrag.domain.errors import ValidationDomainError
+from vikingrag.domain.models.document import DocumentId
 from vikingrag.domain.models.primitives import GrepRequest, ListRequest, ReadRequest
 from vikingrag.domain.models.representation import SearchRequest
 from vikingrag.providers.llm.base import ToolCall
@@ -47,6 +48,7 @@ class RetrievalToolExecutor:
         read: ReadService | None = None,
         search_plus: Any | None = None,
         use_search_plus: bool = False,
+        document_ids: tuple[DocumentId, ...] = (),
     ) -> None:
         self._search = search
         self._list = list_service
@@ -54,6 +56,7 @@ class RetrievalToolExecutor:
         self._read = read
         self._search_plus = search_plus
         self._use_search_plus = use_search_plus
+        self._document_ids = document_ids
         self.state = ToolExecutorState()
 
     async def execute(
@@ -130,6 +133,23 @@ class RetrievalToolExecutor:
                 error=type(exc).__name__,
             )
         self.state.events.append(rec)
+        # After Search, emit EDGE_EXPAND so Alg-2 partitions U_src vs U_edge.
+        if rec.ok and rec.name == "Search":
+            expansions = rec.result.get("expansions") or []
+            if expansions:
+                expand_uris = tuple(
+                    str(e["uri"]) for e in expansions if isinstance(e, dict) and e.get("uri")
+                )
+                self.state.events.append(
+                    ToolExecutionRecord(
+                        tool_call_id=f"{rec.tool_call_id}:edge_expand",
+                        name="EDGE_EXPAND",
+                        arguments={"query": rec.arguments.get("query")},
+                        result={"expansions": expansions, "kind": "edge_expand"},
+                        result_uris=expand_uris,
+                        ok=True,
+                    )
+                )
         return rec
 
     def no_progress(self, *, window: int = 4) -> bool:
@@ -148,7 +168,12 @@ class RetrievalToolExecutor:
         k = int(args.get("top_k") or top_k)
         scope_raw = args.get("scope_uri") or args.get("uri")
         scope_uri = str(scope_raw).strip() if scope_raw else None
-        search_req = SearchRequest(query=query, top_k=k, scope_uri=scope_uri)
+        search_req = SearchRequest(
+            query=query,
+            top_k=k,
+            scope_uri=scope_uri,
+            document_ids=self._document_ids,
+        )
         if self._use_search_plus and self._search_plus is not None:
             response = await self._search_plus.search(search_req, ctx=ctx)
             # SearchPlusResponse exposes candidates via `.base`; plain SearchResponse has them top-level
@@ -174,21 +199,13 @@ class RetrievalToolExecutor:
             }
             for h in candidates
         ]
-        seed_uris = tuple(h.uri for h in candidates)
-        expand_uris = tuple(e["uri"] for e in expanded)
-        # Deduped seeds + expansions for result_refs / U_edge tracking
-        seen: set[str] = set()
-        uris_list: list[str] = []
-        for u in (*seed_uris, *expand_uris):
-            if u not in seen:
-                seen.add(u)
-                uris_list.append(u)
+        # result_uris = seeds only; expansions recorded as EDGE_EXPAND in execute().
         return {
             "hits": hits,
             "expansions": expanded,
             "count": len(hits),
             "cold_path": bool(getattr(response, "cold_path", False)),
-        }, tuple(uris_list)
+        }, tuple(h.uri for h in candidates)
 
     async def _do_list(
         self, args: dict[str, Any], *, ctx: RetrievalContext

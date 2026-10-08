@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vikingrag"
-version = "0.4.1"
+version = "0.4.2"
 description = "Production hierarchical RAG: structure-aware Search, agentic retrieval, experience edges"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -91,6 +91,7 @@ include = [
 packages = ["src/vikingrag"]
 
 # Ship Alembic scripts inside the installed package for `vikingrag-migrate`.
+# Smoke fixture lives under src/vikingrag/evaluation/fixtures/ (packaged with the module).
 [tool.hatch.build.targets.wheel.force-include]
 "migrations" = "vikingrag/migrations"
 

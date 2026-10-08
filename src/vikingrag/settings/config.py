@@ -31,6 +31,8 @@ class AppSettings(BaseSettings):
 
     name: str = "vikingrag"
     env: Literal["development", "test", "staging", "production"] = "development"
+    # migrate | api | worker — production provider checks are role-scoped
+    process_role: Literal["api", "migrate", "worker"] = "api"
     debug: bool = False
     log_level: str = "INFO"
     host: str = "0.0.0.0"
@@ -88,7 +90,8 @@ class LLMSettings(BaseSettings):
     )
 
     provider: str = "unimplemented"
-    model: str = "gpt-4o-mini"
+    # Empty → factory uses provider preset default_model
+    model: str = ""
     base_url: str = "https://api.openai.com/v1"
     api_key: str | None = None
     timeout_seconds: float = 30.0
@@ -105,7 +108,8 @@ class EmbeddingSettings(BaseSettings):
     )
 
     provider: str = "unimplemented"
-    model: str = "text-embedding-3-small"
+    # Empty → factory uses provider preset default_embedding_model
+    model: str = ""
     base_url: str = "https://api.openai.com/v1"
     api_key: str | None = None
     dimensions: int = 1536
@@ -148,6 +152,7 @@ def parse_allowed_document_ids(raw: str | None) -> frozenset[DocumentId] | None:
     """Map allowlist config to permitted set.
 
     - ``None`` (unset) → unrestricted (``None``)
+    - ``*`` / ``all`` / ``unrestricted`` → unrestricted
     - empty / whitespace → deny-all (``frozenset()``)
     - comma-separated UUIDs → frozenset of DocumentId
     """
@@ -156,6 +161,8 @@ def parse_allowed_document_ids(raw: str | None) -> frozenset[DocumentId] | None:
     stripped = raw.strip()
     if stripped == "":
         return frozenset()
+    if stripped.lower() in {"*", "all", "unrestricted"}:
+        return None
     ids: list[DocumentId] = []
     for part in stripped.split(","):
         token = part.strip()
@@ -374,8 +381,8 @@ class Settings(BaseSettings):
             self.retrieval.max_tool_calls = max(self.retrieval.max_tool_calls, 60)
             self.retrieval.max_wall_time_ms = max(self.retrieval.max_wall_time_ms, 300_000)
         if self.app.env == "production":
-            _reject_fake_providers(self)
-            if self.auth.enabled and not self.auth.api_key:
+            _reject_fake_providers_for_role(self)
+            if self.app.process_role == "api" and self.auth.enabled and not self.auth.api_key:
                 raise ValueError("production auth requires VIKINGRAG_AUTH_API_KEY")
         return self
 
@@ -383,7 +390,39 @@ class Settings(BaseSettings):
 _FAKE_PROVIDERS = frozenset({"fake", "test", "deterministic", "scripted", "unimplemented"})
 
 
+def _reject_fake_providers_for_role(settings: Settings) -> None:
+    """Production provider checks depend on process role.
+
+    - migrate: database only (no LLM/embedding/assessor required)
+    - worker: LLM required; embedding + assessor when SUPPORT=llm
+    - api: full stack (LLM, embedding, assessor)
+    """
+    role = settings.app.process_role
+    if role == "migrate":
+        return
+    checks: list[tuple[str, str]] = [("llm", settings.llm.provider)]
+    if role == "api":
+        checks.extend(
+            [
+                ("embedding", settings.embedding.provider),
+                ("assessor", settings.retrieval.assessor_provider),
+            ]
+        )
+    elif role == "worker":
+        support = str(getattr(settings.retrieval, "support_selector", "deterministic")).lower()
+        if support == "llm":
+            checks.append(("embedding", settings.embedding.provider))
+            # assessor not required for edge builder SUPPORT path
+        else:
+            # Deterministic SUPPORT still may embed query vectors for edges
+            checks.append(("embedding", settings.embedding.provider))
+    for label, value in checks:
+        if value.lower() in _FAKE_PROVIDERS:
+            raise ValueError(f"production forbids {label} provider={value!r}; use a real provider")
+
+
 def _reject_fake_providers(settings: Settings) -> None:
+    """Backward-compatible full-stack production rejection (api role)."""
     for label, value in (
         ("llm", settings.llm.provider),
         ("embedding", settings.embedding.provider),

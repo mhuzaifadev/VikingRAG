@@ -30,6 +30,8 @@ _EVENT_MAP = {
     "Grep": RetrievalEventType.GREP,
     "Read": RetrievalEventType.READ,
     "Stop": RetrievalEventType.ANSWER,
+    "EDGE_EXPAND": RetrievalEventType.EDGE_EXPAND,
+    "EdgeExpand": RetrievalEventType.EDGE_EXPAND,
 }
 
 

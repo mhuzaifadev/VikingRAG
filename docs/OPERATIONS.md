@@ -135,8 +135,11 @@ Do not invent paper table numbers. See [EVALUATION.md](EVALUATION.md).
 ## Auth (single-tenant)
 
 - Shared API key: `VIKINGRAG_AUTH_API_KEY`
-- Document allowlist: `VIKINGRAG_AUTH_ALLOWED_DOCUMENT_IDS` (comma-separated UUIDs)
-- Unset allowlist with auth enabled → unrestricted; empty allowlist → allow-nothing
+- Document allowlist: `VIKINGRAG_AUTH_ALLOWED_DOCUMENT_IDS`
+  - unset or `*` / `all` → unrestricted
+  - empty string → allow-nothing (deny-all)
+  - comma-separated UUIDs → allowlist
+- Prod Compose defaults the allowlist to `*` when the host env omits it (avoids accidental deny-all)
 
 ## Object store
 

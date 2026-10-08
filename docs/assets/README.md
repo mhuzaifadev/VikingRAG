@@ -1,16 +1,16 @@
 # README visuals
 
-Optional images for the GitHub README. Drop exports here, then uncomment the matching `<img>` tags under **Why VikingRAG?** in the root `README.md`.
-
-| File | Suggested use |
+| File | Content |
 |---|---|
-| `comparison-accuracy.png` | Accuracy vs baselines |
-| `comparison-tokens.png` | Token cost comparison |
-| `architecture-overview.png` | Optional diagram (Mermaid is already inline) |
-| `flow-eplus.png` | E+ one-round vs agentic escalation |
+| `comparison-tokens.png` | Paper Table 3 — VikingRAG / E / E+ token % vs gold baseline |
+| `comparison-accuracy.png` | Paper Table 3 — E+ vs gold & silver baselines (accuracy claimed competitive in paper Fig. 3) |
 
-Guidelines:
+**Provenance:** numbers from Gao et al., [arXiv:2609.11390](https://arxiv.org/abs/2609.11390). They are **not** runs of this Apache-2.0 repo.
 
-- PNG or SVG, roughly under 1–2 MB each
-- Only charts from your real runs, or clearly cited paper figures
-- Link as: `![label](docs/assets/your-file.png)`
+Regenerate:
+
+```bash
+uv run python scripts/render_paper_comparison_charts.py
+```
+
+When you have your own eval exports, replace these PNGs and update the README caption so it no longer says “paper experiments.”

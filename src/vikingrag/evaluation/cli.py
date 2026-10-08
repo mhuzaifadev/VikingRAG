@@ -59,19 +59,56 @@ def _cmd_list(_args: argparse.Namespace) -> int:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    del args
-    print(
-        "Full evaluation run is not available until datasets and VIKINGRAG_EVAL_* "
-        "settings are configured. Status: BLOCKED/unmeasured. "
-        "Use: vikingrag-eval smoke --offline",
-        file=sys.stderr,
-    )
-    return 2
+    import asyncio
+    import json
+
+    from vikingrag.evaluation.runner import load_examples_from_manifest, run_evaluation
+
+    if not args.manifest:
+        print(
+            "vikingrag-eval run requires --manifest path/to/manifest.json "
+            "with an examples/questions list. Status: BLOCKED.",
+            file=sys.stderr,
+        )
+        return 2
+    path = Path(args.manifest)
+    if not path.is_file():
+        print(f"manifest not found: {path}", file=sys.stderr)
+        return 1
+    examples = load_examples_from_manifest(path)
+    if not examples:
+        print("manifest has no usable examples", file=sys.stderr)
+        return 1
+
+    # Default: identity echo method (wiring). Wire VikingRAGClient methods in-process.
+    async def _echo(question: str, *, document_ids: tuple[str, ...] = ()) -> dict[str, object]:
+        del document_ids
+        return {"answer": None, "citations": (), "usage": {}, "note": "echo_placeholder"}
+
+    methods = {"echo_placeholder": _echo}
+    if args.method:
+        print(
+            "Custom method wiring via CLI flags is not implemented; "
+            "use the Python runner API with VikingRAGClient callables.",
+            file=sys.stderr,
+        )
+        return 2
+
+    report = asyncio.run(run_evaluation(examples=examples, methods=methods))
+    out = Path(args.output) if args.output else None
+    payload = json.dumps(report.to_dict(), indent=2) + "\n"
+    if out:
+        out.write_text(payload, encoding="utf-8")
+        print(f"wrote={out} status={report.status} measured_scores=null")
+    else:
+        print(payload, end="")
+    return 0
 
 
 def _cmd_warmup(args: argparse.Namespace) -> int:
     from vikingrag.evaluation.adapters import get_adapter
     from vikingrag.evaluation.warmup import WarmupBlockedError, plan_warmup, run_warmup
+    from vikingrag.providers.factory import build_llm_provider
     from vikingrag.settings.config import get_settings
 
     plan = plan_warmup(dataset=args.dataset, m=args.m, data_dir=args.data_dir)
@@ -91,11 +128,25 @@ def _cmd_warmup(args: argparse.Namespace) -> int:
         f"corpus_present={present} llm_configured={llm_ok}"
     )
     print(plan.notes)
+    llm = None
+    if llm_ok:
+        try:
+            llm = build_llm_provider(settings)
+        except Exception as exc:
+            print(f"llm_build_failed: {exc}", file=sys.stderr)
+            llm_ok = False
     try:
-        run_warmup(plan, llm_configured=llm_ok, corpus_present=present)
+        result = run_warmup(
+            plan,
+            llm_configured=llm_ok,
+            corpus_present=present,
+            llm=llm,
+            model=settings.llm.model or None,
+        )
     except WarmupBlockedError as exc:
         print(exc.message, file=sys.stderr)
         return 2
+    print(f"warmup_completed m_generated={result.m_generated} manifest={result.manifest_path}")
     return 0
 
 
@@ -130,8 +181,13 @@ def build_parser() -> argparse.ArgumentParser:
     listing = sub.add_parser("list", help="List dataset adapters")
     listing.set_defaults(func=_cmd_list)
 
-    run = sub.add_parser("run", help="Run a scored evaluation (blocked until configured)")
-    run.add_argument("--manifest", type=str, default=None)
+    run = sub.add_parser(
+        "run",
+        help="Run evaluation from a manifest (measured_scores null without a judge)",
+    )
+    run.add_argument("--manifest", type=str, default=None, help="JSON with examples/questions")
+    run.add_argument("--output", type=str, default=None, help="Write report JSON path")
+    run.add_argument("--method", type=str, default=None, help="Reserved for client wiring")
     run.set_defaults(func=_cmd_run)
 
     warmup = sub.add_parser(

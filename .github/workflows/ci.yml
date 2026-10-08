@@ -37,6 +37,15 @@ jobs:
       - name: Offline evaluation smoke
         run: uv run vikingrag-eval smoke --offline
 
+      - name: Wheel build + clean-install smoke
+        run: |
+          rm -rf dist /tmp/vikingrag-wheel-smoke
+          uv build
+          python -m venv /tmp/vikingrag-wheel-smoke
+          /tmp/vikingrag-wheel-smoke/bin/pip install dist/vikingrag-*.whl
+          cd /tmp
+          /tmp/vikingrag-wheel-smoke/bin/vikingrag-eval smoke --offline
+
   integration:
     runs-on: ubuntu-latest
     needs: quality
