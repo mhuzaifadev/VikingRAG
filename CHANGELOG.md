@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.4.3
+
+Learning-trace, eval-mode, and warm-up corpus-safety release. Performance and paper-table quality remain **unmeasured** in this repo until you run them.
+
+### Fixed
+
+- E+ ONE_ROUND returns enqueue-shaped `Search` / `EDGE_EXPAND` / `Read` `trace_events` (with `result_uris`) so Algorithm 2 can learn
+- `vikingrag-eval run` wires real `vikingrag` / `vikingrag_e` / `vikingrag_e_plus` methods (echo only via `--method echo`)
+- Warm-up samples source documents under `documents/` / `corpus/` (`.md`/`.txt`) only — never gold QA JSON/JSONL
+
+### Added
+
+- Optional `--judge scripted` deterministic citation / non-empty-answer rates (not LLM accuracy)
+- Warm-up materializes edges via E+/E answers + edge-builder drain; manifest records `jobs_drained` / `edges_built`
+- Unit coverage: E+ learning trace, eval method wiring, poison-JSON warm-up, in-memory learning E2E
+- EVALUATION.md measured-results template (unmeasured until filled)
+
 ## v0.4.2
 
 Correctness hotfix after PyPI `0.4.1` review (scope, E+, Compose, packaging).

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from vikingrag.domain.errors import DomainError
+
+# Warm-up / indexing source text only — never gold QA JSON/JSONL.
+SOURCE_DOCUMENT_SUFFIXES: frozenset[str] = frozenset({".md", ".txt"})
+SOURCE_DOCUMENT_DIR_NAMES: tuple[str, ...] = ("documents", "corpus")
 
 
 class DatasetNotAvailableError(DomainError):
@@ -18,6 +23,15 @@ class DatasetNotAvailableError(DomainError):
             code="dataset_not_available",
         )
         self.dataset = dataset
+
+
+@dataclass(frozen=True, slots=True)
+class SourceDocument:
+    """Plain-text corpus document for warm-up / indexing (not eval gold)."""
+
+    document_id: str
+    text: str
+    path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +53,34 @@ class VerifyResult:
     path: Path | None
     message: str
     sha256: str | None = None
+
+
+def iter_source_documents_from_root(data_root: Path) -> Iterator[SourceDocument]:
+    """Yield ``.md``/``.txt`` under ``documents/`` or ``corpus/`` only.
+
+    Never reads ``qa.*``, ``*.json``, or ``*.jsonl`` gold files.
+    """
+    roots: list[Path] = []
+    for name in SOURCE_DOCUMENT_DIR_NAMES:
+        candidate = data_root / name
+        if candidate.is_dir():
+            roots.append(candidate)
+    if not roots:
+        return
+    for root in roots:
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in SOURCE_DOCUMENT_SUFFIXES:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if not text.strip():
+                continue
+            rel = path.relative_to(data_root).as_posix()
+            yield SourceDocument(document_id=rel, text=text, path=str(path))
 
 
 @runtime_checkable
@@ -63,6 +105,10 @@ class DatasetAdapter(Protocol):
 
     def require_present(self, base: Path) -> Path:
         """Return dataset path or raise DatasetNotAvailableError."""
+        ...
+
+    def iter_source_documents(self, data_root: Path) -> Iterator[SourceDocument]:
+        """Corpus source documents for warm-up (never gold QA JSON)."""
         ...
 
 
@@ -144,3 +190,7 @@ class StubDatasetAdapter:
                 or f"place files under {self.data_root(base)} after verifying checksums",
             )
         return result.path
+
+    def iter_source_documents(self, data_root: Path) -> Iterator[SourceDocument]:
+        """Default: ``documents/`` and ``corpus/`` ``.md``/``.txt`` only."""
+        yield from iter_source_documents_from_root(data_root)

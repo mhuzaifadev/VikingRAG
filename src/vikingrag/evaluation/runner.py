@@ -7,6 +7,10 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import UUID
+
+from vikingrag.domain.models.answer import AnswerRequest, AnswerResponse, ExecutionMode
+from vikingrag.domain.models.document import DocumentId
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +54,126 @@ class AnswerCallable(Protocol):
     async def __call__(self, question: str, *, document_ids: tuple[str, ...] = ()) -> Any: ...
 
 
+VIKINGRAG_METHOD_MODES: dict[str, ExecutionMode] = {
+    "vikingrag": ExecutionMode.VIKINGRAG,
+    "vikingrag_e": ExecutionMode.VIKINGRAG_E,
+    "vikingrag_e_plus": ExecutionMode.VIKINGRAG_E_PLUS,
+}
+
+DEFAULT_EVAL_METHODS: tuple[str, ...] = tuple(VIKINGRAG_METHOD_MODES.keys())
+
+
+def _parse_document_ids(raw: tuple[str, ...]) -> tuple[DocumentId, ...]:
+    out: list[DocumentId] = []
+    for value in raw:
+        try:
+            out.append(DocumentId(UUID(str(value))))
+        except (ValueError, TypeError):
+            continue
+    return tuple(out)
+
+
+def build_vikingrag_methods(client: Any) -> dict[str, AnswerCallable]:
+    """Map paper method names to ``AnswerGenerator.generate`` with execution modes."""
+
+    generator = client.answer_generator()
+
+    def _make(mode: ExecutionMode) -> AnswerCallable:
+        async def _call(question: str, *, document_ids: tuple[str, ...] = ()) -> AnswerResponse:
+            resp = await generator.generate(
+                AnswerRequest(
+                    question=question,
+                    document_ids=_parse_document_ids(document_ids),
+                    execution_mode=mode,
+                )
+            )
+            if not isinstance(resp, AnswerResponse):
+                raise TypeError(f"expected AnswerResponse, got {type(resp)!r}")
+            return resp
+
+        return _call
+
+    return {name: _make(mode) for name, mode in VIKINGRAG_METHOD_MODES.items()}
+
+
+def echo_placeholder_method() -> AnswerCallable:
+    """Wiring-only echo; keep behind ``--method echo``."""
+
+    async def _echo(question: str, *, document_ids: tuple[str, ...] = ()) -> dict[str, object]:
+        del document_ids
+        return {
+            "answer": None,
+            "citations": (),
+            "usage": {},
+            "note": "echo_placeholder",
+            "question": question,
+        }
+
+    return _echo
+
+
+def resolve_methods(
+    names: list[str] | tuple[str, ...] | None,
+    *,
+    client: Any | None = None,
+) -> dict[str, AnswerCallable]:
+    """Build method callables from a comma-split name list."""
+    selected = list(names) if names else list(DEFAULT_EVAL_METHODS)
+    out: dict[str, AnswerCallable] = {}
+    need_client = any(n in VIKINGRAG_METHOD_MODES for n in selected)
+    if need_client and client is None:
+        raise ValueError(
+            "VikingRAG methods require a VikingRAGClient; "
+            "pass client= or construct via VikingRAGClient.from_settings()"
+        )
+    viking = build_vikingrag_methods(client) if client is not None else {}
+    for name in selected:
+        key = name.strip().lower()
+        if key in {"echo", "echo_placeholder"}:
+            out["echo_placeholder"] = echo_placeholder_method()
+        elif key in viking:
+            out[key] = viking[key]
+        else:
+            known = ", ".join([*DEFAULT_EVAL_METHODS, "echo"])
+            raise ValueError(f"Unknown method {name!r}; known: {known}")
+    return out
+
+
+def citation_validity_metrics(results: list[MethodResult]) -> dict[str, Any]:
+    """Deterministic rates: non-empty answers and citation presence. Not LLM accuracy."""
+    by_method: dict[str, dict[str, float | int]] = {}
+    for r in results:
+        bucket = by_method.setdefault(
+            r.method,
+            {
+                "n": 0,
+                "answered": 0,
+                "with_citations": 0,
+                "errors": 0,
+            },
+        )
+        bucket["n"] = int(bucket["n"]) + 1
+        if r.error:
+            bucket["errors"] = int(bucket["errors"]) + 1
+            continue
+        if isinstance(r.answer, str) and r.answer.strip():
+            bucket["answered"] = int(bucket["answered"]) + 1
+        if r.citation_count > 0:
+            bucket["with_citations"] = int(bucket["with_citations"]) + 1
+
+    scores: dict[str, Any] = {}
+    for method, b in by_method.items():
+        n = int(b["n"])
+        scored = max(n - int(b["errors"]), 0)
+        scores[method] = {
+            "n": n,
+            "error_rate": (int(b["errors"]) / n) if n else 0.0,
+            "non_empty_answer_rate": (int(b["answered"]) / scored) if scored else 0.0,
+            "citation_presence_rate": (int(b["with_citations"]) / scored) if scored else 0.0,
+        }
+    return scores
+
+
 def load_examples_from_manifest(path: Path) -> list[EvalExample]:
     data = json.loads(path.read_text(encoding="utf-8"))
     raw = data.get("examples") or data.get("questions") or []
@@ -80,10 +204,13 @@ async def run_evaluation(
     *,
     examples: list[EvalExample],
     methods: dict[str, AnswerCallable],
-    judge: Any | None = None,
+    judge: str | None = None,
 ) -> EvalRunReport:
-    """Execute methods on examples. Judge optional — scores stay null without it."""
-    del judge  # claim-level judging reserved; do not invent scores
+    """Execute methods on examples.
+
+    ``judge="scripted"`` computes deterministic citation/non-empty rates into
+    ``measured_scores``. Anything else leaves scores null (no invented LLM accuracy).
+    """
     results: list[MethodResult] = []
     for name, fn in methods.items():
         for ex in examples:
@@ -94,8 +221,11 @@ async def run_evaluation(
                 answer = getattr(resp, "answer", None)
                 if isinstance(resp, dict):
                     answer = resp.get("answer")
-                citations = getattr(resp, "citations", ()) or ()
-                usage = dict(getattr(resp, "usage", {}) or {})
+                    citations = resp.get("citations") or ()
+                    usage = dict(resp.get("usage") or {})
+                else:
+                    citations = getattr(resp, "citations", ()) or ()
+                    usage = dict(getattr(resp, "usage", {}) or {})
                 results.append(
                     MethodResult(
                         method=name,
@@ -116,6 +246,21 @@ async def run_evaluation(
                         error=f"{type(exc).__name__}: {exc}",
                     )
                 )
+
+    judge_key = (judge or "").strip().lower()
+    if judge_key in {"scripted", "citation", "deterministic"}:
+        measured = citation_validity_metrics(results)
+        return EvalRunReport(
+            status="completed",
+            methods=tuple(methods.keys()),
+            results=results,
+            measured_scores=measured,
+            notes=(
+                "Deterministic citation_presence_rate / non_empty_answer_rate only. "
+                "Not LLM answer accuracy."
+            ),
+        )
+
     return EvalRunReport(
         status="completed_unjudged",
         methods=tuple(methods.keys()),
@@ -123,6 +268,6 @@ async def run_evaluation(
         measured_scores=None,
         notes=(
             "Answers recorded with latency/usage/citation_count. "
-            "measured_scores is null until an explicit judge is configured."
+            "measured_scores is null until --judge scripted (or equivalent) is set."
         ),
     )

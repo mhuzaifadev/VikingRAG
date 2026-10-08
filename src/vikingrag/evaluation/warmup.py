@@ -2,18 +2,26 @@
 
 Does not invent questions or scores. Requires an ingested corpus + LLM.
 When prerequisites are missing, raises a clear blocked error.
-When present, generates document-grounded questions and writes a manifest.
+When present, generates document-grounded questions, optionally runs E+/E
+to enqueue learning, drains the edge builder, and writes a manifest.
 """
 
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from vikingrag.domain.errors import DomainError
+from vikingrag.domain.models.answer import AnswerRequest, ExecutionMode
+from vikingrag.evaluation.base import SourceDocument
 from vikingrag.providers.llm.base import ChatMessage, LLMProvider
+
+AnswerFn = Callable[[str], Awaitable[Any]]
+DrainFn = Callable[[], Awaitable[tuple[int, int]]]  # (jobs_drained, edges_built)
 
 
 class WarmupBlockedError(DomainError):
@@ -31,7 +39,8 @@ class WarmupPlan:
     notes: str = (
         "Generate M distinct document-grounded questions from the ingested corpus only. "
         "Do not use evaluation QA pairs, gold answers, or paraphrases. "
-        "Process with VikingRAG-E(+) to materialize experience edges before benchmark runs."
+        "Process with VikingRAG-E(+) to materialize experience edges before benchmark runs. "
+        "Source text is read only from documents/ or corpus/ (.md/.txt) — never qa.* / gold JSON."
     )
 
 
@@ -43,6 +52,8 @@ class WarmupResult:
     questions: tuple[str, ...]
     manifest_path: str
     status: str  # completed | blocked
+    edges_built: int = 0
+    jobs_drained: int = 0
 
 
 def plan_warmup(*, dataset: str, m: int = 1000, data_dir: str = "data/eval") -> WarmupPlan:
@@ -51,28 +62,33 @@ def plan_warmup(*, dataset: str, m: int = 1000, data_dir: str = "data/eval") -> 
     return WarmupPlan(dataset=dataset, m=m, data_dir=data_dir)
 
 
-def _corpus_text_sample(data_root: Path, *, max_chars: int = 12_000) -> str:
+def corpus_excerpt_from_documents(
+    documents: Iterator[SourceDocument] | list[SourceDocument],
+    *,
+    max_chars: int = 12_000,
+) -> str:
+    """Join source-document text for LLM warm-up prompts."""
     chunks: list[str] = []
     total = 0
-    for path in sorted(data_root.rglob("*")):
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in {".md", ".txt", ".json", ".jsonl"}:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if path.suffix.lower() in {".json", ".jsonl"}:
-            # Prefer raw text snippets, not gold QA fields
-            text = text[:2000]
+    for doc in documents:
         remain = max_chars - total
         if remain <= 0:
             break
-        piece = text[:remain]
-        chunks.append(f"--- {path.name} ---\n{piece}")
+        piece = doc.text[:remain]
+        label = doc.document_id or (doc.path or "doc")
+        chunks.append(f"--- {label} ---\n{piece}")
         total += len(piece)
     return "\n\n".join(chunks)
+
+
+def _corpus_text_sample(data_root: Path, *, max_chars: int = 12_000) -> str:
+    """Sample corpus text from adapter source documents only (no gold JSON)."""
+    from vikingrag.evaluation.base import iter_source_documents_from_root
+
+    return corpus_excerpt_from_documents(
+        iter_source_documents_from_root(data_root),
+        max_chars=max_chars,
+    )
 
 
 async def generate_historical_questions(
@@ -114,6 +130,65 @@ async def generate_historical_questions(
     return questions[:m]
 
 
+async def materialize_edges_from_questions(
+    *,
+    questions: list[str],
+    answer_fn: AnswerFn,
+    drain_fn: DrainFn | None = None,
+    execution_mode: ExecutionMode = ExecutionMode.VIKINGRAG_E_PLUS,
+    drain_timeout_s: float = 60.0,
+) -> tuple[int, int]:
+    """Run E+/E answers then drain PENDING edge-builder jobs.
+
+    Returns ``(jobs_drained, edges_built)``. ``edges_built`` is whatever
+    ``drain_fn`` reports (0 when drain is a no-op or unavailable).
+    """
+    del execution_mode  # caller binds mode into answer_fn
+    for q in questions:
+        await answer_fn(q)
+
+    if drain_fn is None:
+        return 0, 0
+
+    jobs_total = 0
+    edges_total = 0
+    deadline = time.monotonic() + max(drain_timeout_s, 0.1)
+    while time.monotonic() < deadline:
+        jobs, edges = await drain_fn()
+        jobs_total += jobs
+        edges_total += edges
+        if jobs == 0:
+            break
+        await _async_sleep(0.25)
+    return jobs_total, edges_total
+
+
+async def _async_sleep(seconds: float) -> None:
+    import asyncio
+
+    await asyncio.sleep(seconds)
+
+
+def _client_answer_fn(client: Any, *, mode: ExecutionMode) -> AnswerFn:
+    generator = client.answer_generator()
+
+    async def _answer(question: str) -> Any:
+        return await generator.generate(AnswerRequest(question=question, execution_mode=mode))
+
+    return _answer
+
+
+def _client_drain_fn(client: Any) -> DrainFn:
+    from vikingrag.workers.edge_builder import process_pending_edge_jobs
+
+    async def _drain() -> tuple[int, int]:
+        jobs = await process_pending_edge_jobs(client.database, batch_size=20)
+        # Edge count is not returned by the worker; jobs_drained is authoritative.
+        return jobs, 0
+
+    return _drain
+
+
 def run_warmup(
     plan: WarmupPlan,
     *,
@@ -121,10 +196,18 @@ def run_warmup(
     corpus_present: bool,
     llm: LLMProvider | None = None,
     model: str | None = None,
+    client: Any | None = None,
+    answer_fn: AnswerFn | None = None,
+    drain_fn: DrainFn | None = None,
+    materialize: bool = True,
+    execution_mode: ExecutionMode = ExecutionMode.VIKINGRAG_E_PLUS,
+    drain_timeout_s: float = 60.0,
+    smoke_max: int | None = None,
 ) -> WarmupResult:
     """Execute warm-up synchronously via asyncio when LLM is provided.
 
     Without ``llm``, raises blocked even if flags say configured (caller must wire).
+    When ``materialize`` and an answer path exist, runs E+ (or E) then drains jobs.
     """
     if not corpus_present:
         raise WarmupBlockedError(
@@ -142,17 +225,43 @@ def run_warmup(
 
     adapter = get_adapter(plan.dataset)
     data_root = adapter.data_root(Path(plan.data_dir))
-    excerpt = _corpus_text_sample(data_root)
+    docs = list(adapter.iter_source_documents(data_root))
+    excerpt = corpus_excerpt_from_documents(docs)
     if not excerpt.strip():
         raise WarmupBlockedError(
-            f"Corpus under {data_root} has no readable text files for warm-up."
+            f"Corpus under {data_root} has no source documents under "
+            f"documents/ or corpus/ (.md/.txt only). Gold QA JSON is ignored."
         )
 
     import asyncio
 
+    m = plan.m
+    if smoke_max is not None:
+        m = min(m, max(1, smoke_max))
+
     questions = asyncio.run(
-        generate_historical_questions(llm=llm, corpus_excerpt=excerpt, m=plan.m, model=model)
+        generate_historical_questions(llm=llm, corpus_excerpt=excerpt, m=m, model=model)
     )
+
+    edges_built = 0
+    jobs_drained = 0
+    if materialize:
+        bound_answer = answer_fn
+        bound_drain = drain_fn
+        if bound_answer is None and client is not None:
+            bound_answer = _client_answer_fn(client, mode=execution_mode)
+            bound_drain = bound_drain or _client_drain_fn(client)
+        if bound_answer is not None:
+            jobs_drained, edges_built = asyncio.run(
+                materialize_edges_from_questions(
+                    questions=questions,
+                    answer_fn=bound_answer,
+                    drain_fn=bound_drain,
+                    execution_mode=execution_mode,
+                    drain_timeout_s=drain_timeout_s,
+                )
+            )
+
     out_dir = data_root / "warmup"
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / f"warmup_m{plan.m}.json"
@@ -161,9 +270,12 @@ def run_warmup(
         "m_requested": plan.m,
         "m_generated": len(questions),
         "questions": questions,
+        "edges_built": edges_built,
+        "jobs_drained": jobs_drained,
         "notes": plan.notes,
         "measured_scores": None,
         "status": "completed",
+        "execution_mode": execution_mode.value if materialize else None,
     }
     manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return WarmupResult(
@@ -173,6 +285,8 @@ def run_warmup(
         questions=tuple(questions),
         manifest_path=str(manifest_path),
         status="completed",
+        edges_built=edges_built,
+        jobs_drained=jobs_drained,
     )
 
 

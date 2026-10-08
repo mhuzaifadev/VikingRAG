@@ -19,7 +19,7 @@ from vikingrag.application.orchestration.candidate import (
     draft_candidate_answer,
 )
 from vikingrag.application.search import SemanticSearchService
-from vikingrag.application.search_plus import ExperienceAugmentedSearch
+from vikingrag.application.search_plus import ExperienceAugmentedSearch, SearchPlusResponse
 from vikingrag.domain.errors import NotImplementedCapabilityError
 from vikingrag.domain.models.answer import ExecutionMode
 from vikingrag.domain.models.assessment import AssessmentStatus, EvidenceAssessment
@@ -39,6 +39,48 @@ from vikingrag.observability.logging import get_logger
 from vikingrag.providers.llm.base import LLMProvider
 
 logger = get_logger(__name__)
+
+
+def learning_events_from_eplus(
+    plus: SearchPlusResponse,
+    evidence: EvidenceBundle,
+) -> tuple[dict[str, Any], ...]:
+    """Build enqueue-compatible Search / EDGE_EXPAND / Read events for Alg-2.
+
+    Observability ``RetrievalTrace`` records lack URIs and wrong names; do not
+    use them for experience learning.
+    """
+    events: list[dict[str, Any]] = []
+    seed_uris = tuple(h.uri for h in plus.base.candidates)
+    events.append(
+        {
+            "name": "Search",
+            "arguments": {"query": plus.base.query},
+            "result_uris": list(seed_uris),
+            "ok": True,
+        }
+    )
+    expand_uris = tuple(e.target_uri for e in plus.expansions)
+    if expand_uris:
+        events.append(
+            {
+                "name": "EDGE_EXPAND",
+                "arguments": {},
+                "result_uris": list(expand_uris),
+                "ok": True,
+            }
+        )
+    for item in evidence.items:
+        uri = item.uri
+        events.append(
+            {
+                "name": "Read",
+                "arguments": {"uri": uri},
+                "result_uris": [uri],
+                "ok": True,
+            }
+        )
+    return tuple(events)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +213,7 @@ class QueryOrchestrator:
             plus.expansion.all_uris[: request.max_reads],
             ctx=context,
         )
+        learning_events = learning_events_from_eplus(plus, evidence)
 
         assessment: EvidenceAssessment | None = None
         candidate_answer: str | None = None
@@ -203,9 +246,10 @@ class QueryOrchestrator:
                     query_run_id=run_id,
                     cold_path=plus.cold_path,
                     usage=_usage(),
+                    trace_events=learning_events,
                     metadata={
                         "search_plus": True,
-                        "trace_events": len(trace.events),
+                        "trace_event_count": len(learning_events),
                         "note": "sufficient_without_candidate_llm",
                     },
                 )
@@ -245,9 +289,10 @@ class QueryOrchestrator:
                     query_run_id=run_id,
                     cold_path=plus.cold_path,
                     usage=_usage(),
+                    trace_events=learning_events,
                     metadata={
                         "search_plus": True,
-                        "trace_events": len(trace.events),
+                        "trace_event_count": len(learning_events),
                         "candidate": candidate_meta,
                         "citation_count": len(citations),
                     },
@@ -306,6 +351,7 @@ class QueryOrchestrator:
                 query_run_id=run_id,
                 cold_path=plus.cold_path,
                 usage=_usage(),
+                trace_events=learning_events,
                 metadata={
                     "fallback": "algorithm_1_stub",
                     "gaps": list(gaps),

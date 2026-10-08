@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 from vikingrag.evaluation.adapters import ADAPTERS, get_adapter
 from vikingrag.evaluation.base import DatasetNotAvailableError
@@ -62,7 +63,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     import asyncio
     import json
 
-    from vikingrag.evaluation.runner import load_examples_from_manifest, run_evaluation
+    from vikingrag.evaluation.runner import (
+        DEFAULT_EVAL_METHODS,
+        load_examples_from_manifest,
+        resolve_methods,
+        run_evaluation,
+    )
 
     if not args.manifest:
         print(
@@ -80,32 +86,55 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print("manifest has no usable examples", file=sys.stderr)
         return 1
 
-    # Default: identity echo method (wiring). Wire VikingRAGClient methods in-process.
-    async def _echo(question: str, *, document_ids: tuple[str, ...] = ()) -> dict[str, object]:
-        del document_ids
-        return {"answer": None, "citations": (), "usage": {}, "note": "echo_placeholder"}
+    method_names = [
+        p.strip() for p in (args.method or ",".join(DEFAULT_EVAL_METHODS)).split(",") if p.strip()
+    ]
+    echo_only = all(n.lower() in {"echo", "echo_placeholder"} for n in method_names)
 
-    methods = {"echo_placeholder": _echo}
-    if args.method:
-        print(
-            "Custom method wiring via CLI flags is not implemented; "
-            "use the Python runner API with VikingRAGClient callables.",
-            file=sys.stderr,
-        )
-        return 2
+    async def _run() -> Any:
+        from vikingrag.evaluation.runner import EvalRunReport
 
-    report = asyncio.run(run_evaluation(examples=examples, methods=methods))
+        client = None
+        try:
+            if not echo_only:
+                from vikingrag.client import VikingRAGClient
+
+                client = VikingRAGClient.from_settings()
+            methods = resolve_methods(method_names, client=client)
+            result: EvalRunReport = await run_evaluation(
+                examples=examples,
+                methods=methods,
+                judge=args.judge,
+            )
+            return result
+        finally:
+            if client is not None:
+                await client.aclose()
+
+    try:
+        report_obj: Any = asyncio.run(_run())
+    except Exception as exc:
+        print(f"eval_run_failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
     out = Path(args.output) if args.output else None
-    payload = json.dumps(report.to_dict(), indent=2) + "\n"
+    payload = json.dumps(report_obj.to_dict(), indent=2) + "\n"
+    scores = report_obj.measured_scores
     if out:
         out.write_text(payload, encoding="utf-8")
-        print(f"wrote={out} status={report.status} measured_scores=null")
+        print(
+            f"wrote={out} status={report_obj.status} "
+            f"measured_scores={'set' if scores is not None else 'null'}"
+        )
     else:
         print(payload, end="")
     return 0
 
 
 def _cmd_warmup(args: argparse.Namespace) -> int:
+    import asyncio
+
+    from vikingrag.domain.models.answer import ExecutionMode
     from vikingrag.evaluation.adapters import get_adapter
     from vikingrag.evaluation.warmup import WarmupBlockedError, plan_warmup, run_warmup
     from vikingrag.providers.factory import build_llm_provider
@@ -123,9 +152,20 @@ def _cmd_warmup(args: argparse.Namespace) -> int:
         "fake",
         "test",
     } and bool(settings.llm.api_key)
+    mode_name = (args.execution_mode or "vikingrag_e_plus").strip().lower()
+    try:
+        execution_mode = ExecutionMode(mode_name)
+    except ValueError:
+        print(
+            f"invalid --execution-mode {args.execution_mode!r}; "
+            "use vikingrag_e or vikingrag_e_plus",
+            file=sys.stderr,
+        )
+        return 2
     print(
         f"warmup_plan dataset={plan.dataset} m={plan.m} "
-        f"corpus_present={present} llm_configured={llm_ok}"
+        f"corpus_present={present} llm_configured={llm_ok} "
+        f"materialize={not args.skip_materialize} mode={execution_mode.value}"
     )
     print(plan.notes)
     llm = None
@@ -135,6 +175,16 @@ def _cmd_warmup(args: argparse.Namespace) -> int:
         except Exception as exc:
             print(f"llm_build_failed: {exc}", file=sys.stderr)
             llm_ok = False
+
+    client = None
+    if llm_ok and not args.skip_materialize:
+        try:
+            from vikingrag.client import VikingRAGClient
+
+            client = VikingRAGClient.from_settings(settings)
+        except Exception as exc:
+            print(f"client_build_failed: {exc}", file=sys.stderr)
+
     try:
         result = run_warmup(
             plan,
@@ -142,11 +192,23 @@ def _cmd_warmup(args: argparse.Namespace) -> int:
             corpus_present=present,
             llm=llm,
             model=settings.llm.model or None,
+            client=client,
+            materialize=not args.skip_materialize,
+            execution_mode=execution_mode,
+            smoke_max=args.smoke_max,
         )
     except WarmupBlockedError as exc:
         print(exc.message, file=sys.stderr)
         return 2
-    print(f"warmup_completed m_generated={result.m_generated} manifest={result.manifest_path}")
+    finally:
+        if client is not None:
+            asyncio.run(client.aclose())
+
+    print(
+        f"warmup_completed m_generated={result.m_generated} "
+        f"jobs_drained={result.jobs_drained} edges_built={result.edges_built} "
+        f"manifest={result.manifest_path}"
+    )
     return 0
 
 
@@ -187,7 +249,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--manifest", type=str, default=None, help="JSON with examples/questions")
     run.add_argument("--output", type=str, default=None, help="Write report JSON path")
-    run.add_argument("--method", type=str, default=None, help="Reserved for client wiring")
+    run.add_argument(
+        "--method",
+        type=str,
+        default=None,
+        help=(
+            "Comma list of methods (default: vikingrag,vikingrag_e,vikingrag_e_plus). "
+            "Use 'echo' for wiring-only placeholder."
+        ),
+    )
+    run.add_argument(
+        "--judge",
+        type=str,
+        default=None,
+        help="Optional: 'scripted' for deterministic citation/non-empty rates (not LLM accuracy)",
+    )
     run.set_defaults(func=_cmd_run)
 
     warmup = sub.add_parser(
@@ -197,6 +273,22 @@ def build_parser() -> argparse.ArgumentParser:
     warmup.add_argument("--dataset", required=True)
     warmup.add_argument("--m", type=int, default=1000, help="Number of historical questions")
     warmup.add_argument("--data-dir", default="data/eval")
+    warmup.add_argument(
+        "--execution-mode",
+        default="vikingrag_e_plus",
+        help="Mode used to materialize edges (vikingrag_e or vikingrag_e_plus)",
+    )
+    warmup.add_argument(
+        "--skip-materialize",
+        action="store_true",
+        help="Generate questions only; do not run E+/drain edge builder",
+    )
+    warmup.add_argument(
+        "--smoke-max",
+        type=int,
+        default=None,
+        help="Cap generated questions for smoke runs (still labeled by --m in filename)",
+    )
     warmup.set_defaults(func=_cmd_warmup)
 
     return parser

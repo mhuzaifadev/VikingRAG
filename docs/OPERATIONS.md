@@ -119,6 +119,7 @@ asyncio.run(main())
 | `vikingrag-eval smoke --offline` | Fixture integrity JSON — **not** paper scores |
 | `vikingrag-eval list` | Adapter catalog |
 | `vikingrag-eval prepare` / `warmup` / `run` | Require corpora + credentials; otherwise report as unmeasured |
+| Warm-up corpus layout | `data/eval/<dataset>/{corpus,documents}/**/*.{md,txt}` only — never gold `qa.*` / JSONL |
 
 Do not invent paper table numbers. See [EVALUATION.md](EVALUATION.md).
 
