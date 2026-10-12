@@ -68,6 +68,19 @@ def _md(text: str) -> bytes:
     return text.encode("utf-8")
 
 
+def _distinct_target(tree: list, root: str) -> str:
+    """Pick a non-root node URI, or a synthetic distinct URI under the document root.
+
+    Small markdown fixtures may only materialize a document-root node; self-edges
+    are forbidden by the ExperienceEdge domain model.
+    """
+    for node in tree:
+        uri = getattr(node, "uri", None)
+        if uri and uri != root:
+            return str(uri)
+    return f"{root}/nodes/{uuid4()}"
+
+
 async def _seed_edge(
     session,
     *,
@@ -75,6 +88,8 @@ async def _seed_edge(
     target_uri: str,
     document_id: DocumentId | None = None,
 ) -> ExperienceEdge:
+    if source_uri == target_uri:
+        target_uri = f"{source_uri}/nodes/{uuid4()}"
     runs = SqlQueryRunRepository(session)
     edges = SqlExperienceEdgeRepository(session)
     emb = _unit_embedding()
@@ -156,7 +171,7 @@ async def test_replace_by_external_id_invalidates_incident_edges(
     async with database.session() as session:
         nodes = SqlNodeRepository(session)
         tree = await nodes.list_by_document(doc_id)
-        section_uri = next(n.uri for n in tree if n.uri != root)
+        section_uri = _distinct_target(tree, root)
         edge_out = await _seed_edge(
             session, source_uri=root, target_uri=section_uri, document_id=doc_id
         )
@@ -218,7 +233,7 @@ async def test_replace_by_content_hash_without_external_id(
     async with database.session() as session:
         nodes = SqlNodeRepository(session)
         tree = await nodes.list_by_document(doc_id)
-        tgt = next(n.uri for n in tree)
+        tgt = _distinct_target(tree, root)
         edge = await _seed_edge(session, source_uri=root, target_uri=tgt, document_id=doc_id)
         edge_id = edge.id
 
@@ -267,7 +282,7 @@ async def test_direct_pipeline_replace_invalidates(database: Database, tmp_path:
         doc_id = result.document_id
         root = VikingURIParser.build_document_uri(doc_id)
         tree = await nodes.list_by_document(doc_id)
-        tgt = tree[0].uri
+        tgt = _distinct_target(tree, root)
         edge = await _seed_edge(session, source_uri=root, target_uri=tgt, document_id=doc_id)
         edge_id = edge.id
 
@@ -316,9 +331,8 @@ async def test_failed_replace_preserves_hierarchy_bytes_and_edges(
         tree_before = await nodes.list_by_document(doc_id)
         uris_before = {n.uri for n in tree_before}
         root = VikingURIParser.build_document_uri(doc_id)
-        edge = await _seed_edge(
-            session, source_uri=root, target_uri=next(iter(uris_before)), document_id=doc_id
-        )
+        tgt = next((u for u in uris_before if u != root), f"{root}/nodes/{uuid4()}")
+        edge = await _seed_edge(session, source_uri=root, target_uri=tgt, document_id=doc_id)
         edge_id = edge.id
 
     assert old_key
@@ -377,7 +391,10 @@ async def test_soft_delete_invalidates_and_failed_delete_preserves(
         nodes = SqlNodeRepository(session)
         tree = await nodes.list_by_document(doc_id)
         edge = await _seed_edge(
-            session, source_uri=root, target_uri=tree[0].uri, document_id=doc_id
+            session,
+            source_uri=root,
+            target_uri=_distinct_target(tree, root),
+            document_id=doc_id,
         )
         edge_id = edge.id
 
@@ -410,7 +427,10 @@ async def test_soft_delete_invalidates_and_failed_delete_preserves(
         nodes = SqlNodeRepository(session)
         tree = await nodes.list_by_document(doc2)
         edge2 = await _seed_edge(
-            session, source_uri=root2, target_uri=tree[0].uri, document_id=doc2
+            session,
+            source_uri=root2,
+            target_uri=_distinct_target(tree, root2),
+            document_id=doc2,
         )
         edge2_id = edge2.id
 
@@ -449,7 +469,10 @@ async def test_skip_identical_and_create_version_preserve_experience(
         nodes = SqlNodeRepository(session)
         tree = await nodes.list_by_document(doc_id)
         edge = await _seed_edge(
-            session, source_uri=root, target_uri=tree[0].uri, document_id=doc_id
+            session,
+            source_uri=root,
+            target_uri=_distinct_target(tree, root),
+            document_id=doc_id,
         )
         edge_id = edge.id
 
@@ -540,7 +563,12 @@ async def test_prepare_retirement_session_helper(database: Database, tmp_path: P
     async with database.session() as session:
         nodes = SqlNodeRepository(session)
         tree = await nodes.list_by_document(doc_id)
-        await _seed_edge(session, source_uri=root, target_uri=tree[0].uri, document_id=doc_id)
+        await _seed_edge(
+            session,
+            source_uri=root,
+            target_uri=_distinct_target(tree, root),
+            document_id=doc_id,
+        )
         edges_n, jobs_n = await prepare_document_experience_retirement_session(session, doc_id)
         assert edges_n >= 1
         assert jobs_n == 0
