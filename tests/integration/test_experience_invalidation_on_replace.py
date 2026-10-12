@@ -28,7 +28,10 @@ from vikingrag.domain.models.experience import (
 from vikingrag.domain.models.representation import EmbeddingIdentity
 from vikingrag.domain.uri import VikingURIParser
 from vikingrag.infrastructure.database.engine import Database
-from vikingrag.infrastructure.database.models import ExperienceEdgeRow
+from vikingrag.infrastructure.database.models import (
+    DEFAULT_VECTOR_DIMENSIONS,
+    ExperienceEdgeRow,
+)
 from vikingrag.infrastructure.database.repositories.document import SqlDocumentRepository
 from vikingrag.infrastructure.database.repositories.experience import (
     SqlExperienceEdgeRepository,
@@ -46,7 +49,19 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
 
 def _identity() -> EmbeddingIdentity:
-    return EmbeddingIdentity(provider="deterministic", model="test", dimensions=4, version="1")
+    return EmbeddingIdentity(
+        provider="deterministic",
+        model="test",
+        dimensions=DEFAULT_VECTOR_DIMENSIONS,
+        version="1",
+    )
+
+
+def _unit_embedding() -> list[float]:
+    """pgvector columns are fixed at DEFAULT_VECTOR_DIMENSIONS (1536)."""
+    vec = [0.0] * DEFAULT_VECTOR_DIMENSIONS
+    vec[0] = 1.0
+    return vec
 
 
 def _md(text: str) -> bytes:
@@ -62,13 +77,15 @@ async def _seed_edge(
 ) -> ExperienceEdge:
     runs = SqlQueryRunRepository(session)
     edges = SqlExperienceEdgeRepository(session)
+    emb = _unit_embedding()
+    identity = _identity()
     run = QueryRun(
         id=new_query_run_id(),
         query_text="seed",
         status=QueryRunStatus.SUCCEEDED,
         route=QueryRunRoute.ONE_ROUND,
-        query_embedding=[1.0, 0.0, 0.0, 0.0],
-        embedding_identity=_identity(),
+        query_embedding=emb,
+        embedding_identity=identity,
         edge_build_status=EdgeBuildStatus.COMPLETED,
         learning_policy=LearningPolicy.LEARN,
         document_ids=(document_id,) if document_id else (),
@@ -79,8 +96,8 @@ async def _seed_edge(
         id=new_experience_payload_id(),
         query_run_id=run.id,
         query_text="seed",
-        query_embedding=[1.0, 0.0, 0.0, 0.0],
-        embedding_identity=_identity(),
+        query_embedding=list(emb),
+        embedding_identity=identity,
         trace_summary="seed",
         support_uris=(target_uri,),
     )
@@ -485,7 +502,7 @@ async def test_replace_skips_pending_jobs(database: Database, tmp_path: Path) ->
             query_text="pending",
             status=QueryRunStatus.SUCCEEDED,
             route=QueryRunRoute.ONE_ROUND,
-            query_embedding=[1.0, 0.0, 0.0, 0.0],
+            query_embedding=_unit_embedding(),
             embedding_identity=_identity(),
             edge_build_status=EdgeBuildStatus.PENDING,
             learning_policy=LearningPolicy.LEARN,
