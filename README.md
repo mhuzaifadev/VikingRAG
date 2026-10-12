@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/mhuzaifadev/VikingRAG">
-    <img src="https://img.shields.io/badge/VikingRAG-0.5.1-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.5.1" />
+    <img src="https://img.shields.io/badge/VikingRAG-0.5.2-1f6feb?style=for-the-badge&labelColor=0d1117" alt="VikingRAG 0.5.2" />
   </a>
 </p>
 
@@ -29,7 +29,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.5.1"><img src="https://img.shields.io/badge/release-v0.5.1-blue?logo=github" alt="Release v0.5.1" /></a>
+  <a href="https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.5.2"><img src="https://img.shields.io/badge/release-v0.5.2-blue?logo=github" alt="Release v0.5.2" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?logo=apache" alt="Apache 2.0" /></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+" /></a>
   <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white" alt="FastAPI" /></a>
@@ -159,7 +159,7 @@ make dev
 ### Option C — pip from GitHub (pre-release / specific tag)
 
 ```bash
-pip install "git+https://github.com/mhuzaifadev/VikingRAG.git@v0.5.1"
+pip install "git+https://github.com/mhuzaifadev/VikingRAG.git@v0.5.2"
 ```
 
 ### Option D — Docker Compose

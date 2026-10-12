@@ -8,7 +8,8 @@
 | [EVALUATION.md](EVALUATION.md) | Adapters, offline smoke, unmeasured experiments |
 | [OPERATIONS.md](OPERATIONS.md) | Install, deploy, auth, backup |
 | [CHANGELOG.md](../CHANGELOG.md) | Release history |
-| [RELEASE_0.5.1.md](RELEASE_0.5.1.md) | v0.5.1 release gate report |
+| [RELEASE_0.5.2.md](RELEASE_0.5.2.md) | v0.5.2 release gate report |
+| [RELEASE_0.5.1.md](RELEASE_0.5.1.md) | v0.5.1 release gate report (historical) |
 | [RELEASE_0.5.0.md](RELEASE_0.5.0.md) | v0.5.0 release gate report (historical) |
 | [ADR/](ADR/) | Architecture decision records |
 | [assets/](assets/) | Optional README charts (drop PNGs here) |
@@ -19,7 +20,7 @@ Contributor invariants: [`AGENTS.md`](../AGENTS.md). Internal planning/compariso
 
 ## Current release
 
-**`0.5.1`** — independent Postgres/pgvector VikingRAG with controllable learning, transactional experience retirement on document replace/delete, SDK lifecycle (`ingest` / `index` / `ask` / `explain`), and honest eval exports. PyPI package: [`vikingrag`](https://pypi.org/project/vikingrag/).
+**`0.5.2`** — independent Postgres/pgvector VikingRAG with controllable learning, transactional experience retirement on document replace/delete (CI-verified), SDK lifecycle (`ingest` / `index` / `ask` / `explain`), and honest eval exports. PyPI package: [`vikingrag`](https://pypi.org/project/vikingrag/).
 
 ```bash
 pip install -U vikingrag

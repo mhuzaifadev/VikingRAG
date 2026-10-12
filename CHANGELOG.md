@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.2
+
+CI-verified follow-up to v0.5.1. Same product behavior; integration fixtures corrected so Postgres regression checks pass (1536-d embeddings, no self-edges, failed-REPLACE rollback assertion).
+
+PyPI `0.5.1` remains the earlier build; install `vikingrag==0.5.2` for this verified line.
+
 ## v0.5.1
 
 Correctness release for experience-edge handling when documents change. Does not claim this behavior was complete in v0.5.0.
