@@ -338,18 +338,18 @@ async def test_failed_replace_preserves_hierarchy_bytes_and_edges(
     assert old_key
     old_bytes = await store.get(old_key)
 
-    async with database.session() as session:
-        docs = SqlDocumentRepository(session)
-        nodes = SqlNodeRepository(session)
+    async def _boom(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("simulated persist failure")
 
-        async def _boom(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-            raise RuntimeError("simulated persist failure")
-
-        monkeypatch.setattr(SqlNodeRepository, "bulk_create", _boom)
-        pipeline = IngestionPipeline(
-            documents=docs, nodes=nodes, object_store=store, session=session
-        )
-        with pytest.raises(RuntimeError, match="simulated persist failure"):
+    monkeypatch.setattr(SqlNodeRepository, "bulk_create", _boom)
+    # pytest.raises must wrap the session so the error exits the session CM and rolls back.
+    with pytest.raises(RuntimeError, match="simulated persist failure"):
+        async with database.session() as session:
+            docs = SqlDocumentRepository(session)
+            nodes = SqlNodeRepository(session)
+            pipeline = IngestionPipeline(
+                documents=docs, nodes=nodes, object_store=store, session=session
+            )
             await pipeline.run(
                 IngestionInput(
                     filename="fail.md",
