@@ -33,7 +33,19 @@ Baseline: `v0.5.0` / `c4f792b`.
 - No new quality benchmarks in this release
 - No superiority claim vs official AGPL tree
 
-## Blocked
+## Release status
 
-- Postgres integration suite until Docker is available (`make docker-up && make test-integration`)
-- PyPI publish if `UV_PUBLISH_TOKEN` / credentials unavailable at release time
+| Step | Status |
+|---|---|
+| Commit on `main` | `b3483d4` |
+| Tag / GitHub Release | [v0.5.1](https://github.com/mhuzaifadev/VikingRAG/releases/tag/v0.5.1) |
+| PyPI `vikingrag==0.5.1` | **blocked** — `uv publish` needs credentials (`UV_PUBLISH_TOKEN` / trusted publishing) |
+| Postgres integration suite | **blocked** — Docker daemon not running |
+
+```bash
+# When PyPI token is available:
+uv publish
+pip install vikingrag==0.5.1
+python -c "import vikingrag; print(vikingrag.__version__)"
+vikingrag-eval smoke --offline
+```
