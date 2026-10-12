@@ -46,7 +46,21 @@ make dev
 | `learn` | yes | pending → worker | Warm-up / production learning |
 | `frozen` | yes | refuse | Held-out scoring (eval default) |
 
-After warm-up, freeze a snapshot (or keep scoring on `frozen`) so edge counts stay stable. Document replace/delete invalidates old-revision edges.
+After warm-up, freeze a snapshot (or keep scoring on `frozen`) so edge counts stay stable.
+
+### Experience edges when documents change (v0.5.1)
+
+| Event | Experience behavior |
+|---|---|
+| `REPLACE` (external_id or content-hash resolve; service or pipeline) | Invalidate active edges whose source **or** target URI belongs to the document; skip PENDING learning jobs for that document; same DB transaction as hierarchy replace |
+| Soft-delete | Same invalidation + job skip in the same transaction as status → `DELETED` |
+| `SKIP_IDENTICAL` | No change to experience |
+| `CREATE_VERSION` | New document id; previous document’s edges are **not** transferred |
+| Snapshot rollback | Never reactivates `INVALIDATED` edges (document retirement wins) |
+
+Source blobs use revision-specific object keys (`…/source/{content_hash}/{filename}`). A failed REPLACE rolls back DB state and leaves the document pointing at the previous key.
+
+Structural migration and LLM/semantic revalidation of edges across moved sections are **not** implemented — fresh successful queries under `learn` can build new edges.
 
 Explain a past answer (offline, no new LLM calls):
 

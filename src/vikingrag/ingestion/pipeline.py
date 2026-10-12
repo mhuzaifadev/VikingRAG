@@ -5,6 +5,11 @@ from __future__ import annotations
 import time
 from uuid import UUID, uuid4
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from vikingrag.application.experience.invalidate import (
+    prepare_document_experience_retirement_session,
+)
 from vikingrag.domain.models.document import (
     AbstractStatus,
     DocumentId,
@@ -46,6 +51,7 @@ class IngestionPipeline:
         documents: SqlDocumentRepository,
         nodes: SqlNodeRepository,
         object_store: ObjectStore,
+        session: AsyncSession | None = None,
         parsers: ParserRegistry | None = None,
         chunking: ChunkingPolicy | None = None,
         tokenizer: Tokenizer | None = None,
@@ -54,6 +60,8 @@ class IngestionPipeline:
         self._documents = documents
         self._nodes = nodes
         self._object_store = object_store
+        # Prefer explicit session; fall back to the repository's bound session.
+        self._session = session if session is not None else getattr(documents, "_session", None)
         self._parsers = parsers or build_default_parser_registry()
         self._tokenizer = tokenizer or create_tokenizer()
         self._chunking = chunking or StructureAwareChunkingPolicy(
@@ -127,12 +135,30 @@ class IngestionPipeline:
         mark("chunk", t0)
 
         t0 = time.perf_counter()
-        object_key = f"documents/{document_id}/source/{loaded.filename}"
+        # Revision-specific key: REPLACE never overwrites previous source bytes in place.
+        object_key = f"documents/{document_id}/source/{loaded.content_hash}/{loaded.filename}"
         await self._object_store.put(object_key, loaded.content, content_type=loaded.mime_type)
         mark("store", t0)
 
         t0 = time.perf_counter()
         if existing and inbound.strategy is IngestionStrategy.REPLACE:
+            # Same session as hierarchy replace: invalidate edges + skip stale PENDING jobs
+            # before deleting endpoint nodes. On failure the session rolls back.
+            if self._session is None:
+                raise RuntimeError(
+                    "IngestionPipeline REPLACE requires an AsyncSession for transactional "
+                    "experience retirement"
+                )
+            edges_n, jobs_n = await prepare_document_experience_retirement_session(
+                self._session,
+                existing.id,
+            )
+            logger.info(
+                "experience_retired_for_replace",
+                document_id=str(existing.id),
+                edges_invalidated=edges_n,
+                jobs_skipped=jobs_n,
+            )
             await self._nodes.delete_for_document(existing.id)
             record = DocumentRecord(
                 id=existing.id,

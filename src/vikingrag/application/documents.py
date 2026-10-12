@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from vikingrag.application.experience.invalidate import invalidate_edges_for_document
+from vikingrag.application.experience.invalidate import (
+    prepare_document_experience_retirement_session,
+)
 from vikingrag.domain.errors import DocumentNotFound
 from vikingrag.domain.models.document import DocumentId, DocumentStatus, IngestionStrategy
 from vikingrag.infrastructure.database.engine import Database
@@ -40,15 +42,12 @@ class DocumentService:
         external_id: str | None = None,
         strategy: IngestionStrategy | None = None,
     ) -> IngestionResult:
-        resolved_strategy = strategy or IngestionStrategy(self._ingestion_settings.default_strategy)
-        # Invalidate experience edges before REPLACE deletes endpoint nodes
-        if resolved_strategy is IngestionStrategy.REPLACE and external_id:
-            async with self._database.session() as session:
-                docs = SqlDocumentRepository(session)
-                existing = await docs.get_by_external_id(external_id)
-                if existing is not None:
-                    await invalidate_edges_for_document(self._database, existing.id)
+        """Ingest a document.
 
+        REPLACE invalidation lives in ``IngestionPipeline`` (same DB session as
+        hierarchy replace) so external_id and content-hash resolve paths both apply.
+        """
+        resolved_strategy = strategy or IngestionStrategy(self._ingestion_settings.default_strategy)
         async with self._database.session() as session:
             docs = SqlDocumentRepository(session)
             nodes = SqlNodeRepository(session)
@@ -56,6 +55,7 @@ class DocumentService:
                 documents=docs,
                 nodes=nodes,
                 object_store=self._object_store,
+                session=session,
                 chunking_config=ChunkingConfig(
                     target_tokens=self._ingestion_settings.chunk_target_tokens,
                     max_tokens=self._ingestion_settings.chunk_max_tokens,
@@ -81,13 +81,18 @@ class DocumentService:
             return record
 
     async def delete_document(self, document_id: DocumentId) -> None:
-        """Soft-delete a document and invalidate incident experience edges."""
-        await invalidate_edges_for_document(self._database, document_id)
+        """Soft-delete a document and invalidate incident experience edges (one txn)."""
         async with self._database.session() as session:
             docs = SqlDocumentRepository(session)
             record = await docs.get(document_id)
             if record is None:
                 raise DocumentNotFound(f"Document not found: {document_id}")
+            edges, jobs = await prepare_document_experience_retirement_session(session, document_id)
             record.status = DocumentStatus.DELETED
             await docs.update(record)
-        logger.info("document_deleted", document_id=str(document_id))
+        logger.info(
+            "document_deleted",
+            document_id=str(document_id),
+            edges_invalidated=edges,
+            jobs_skipped=jobs,
+        )

@@ -303,6 +303,43 @@ class SqlQueryRunRepository:
             await self._session.flush()
         return claimed
 
+    async def skip_pending_edge_jobs_for_document(
+        self,
+        document_id: DocumentId,
+        *,
+        citation_uris: set[str] | None = None,
+    ) -> int:
+        """Skip PENDING jobs that reference ``document_id`` or intersecting citation URIs.
+
+        Prevents a pre-replace learning job from creating edges against retired endpoints.
+        """
+        stmt = (
+            select(QueryRunRow)
+            .where(QueryRunRow.edge_build_status == EdgeBuildStatus.PENDING.value)
+            .with_for_update(skip_locked=True)
+        )
+        result = await self._session.execute(stmt)
+        rows = list(result.scalars().all())
+        doc_uuid = UUID(str(document_id))
+        uri_set = citation_uris or set()
+        skipped = 0
+        now = datetime.now(UTC)
+        for row in rows:
+            doc_ids = list(row.document_ids or [])
+            touches_doc = any(UUID(str(d)) == doc_uuid for d in doc_ids)
+            meta = dict(row.metadata_ or {})
+            cites = {str(u) for u in (meta.get("citation_uris") or [])}
+            touches_uri = bool(uri_set and cites.intersection(uri_set))
+            if not touches_doc and not touches_uri:
+                continue
+            row.edge_build_status = EdgeBuildStatus.SKIPPED.value
+            row.edge_build_error = "document_replaced_or_deleted"
+            row.updated_at = now
+            skipped += 1
+        if skipped:
+            await self._session.flush()
+        return skipped
+
 
 class SqlRetrievalEventRepository:
     def __init__(self, session: AsyncSession) -> None:

@@ -19,6 +19,7 @@ from vikingrag.domain.models.document import DocumentId
 from vikingrag.domain.models.experience import (
     EdgeBuildStatus,
     ExperienceEdge,
+    ExperienceEdgeStatus,
     ExperienceExpansionLimits,
     ExperiencePayload,
     LearningPolicy,
@@ -140,13 +141,6 @@ async def test_snapshot_freeze_and_rollback() -> None:
     await snaps.freeze(snap.id)
     assert (await snaps.get(snap.id)).status is SnapshotStatus.FROZEN  # type: ignore[union-attr]
 
-    class _Src:
-        async def list_active_edges(self):
-            return [e for e in store.edges.values() if e.status.value == "active"]
-
-        async def set_edge_status(self, edge_id, status):
-            store.edges[edge_id].status = status
-
     e2 = ExperienceEdge(
         id=new_experience_edge_id(),
         payload_id=payload.id,
@@ -154,6 +148,33 @@ async def test_snapshot_freeze_and_rollback() -> None:
         target_uri="viking://objects/" + str(uuid4()) + "/b",
     )
     await store.create_edges([e2])
-    await snaps.rollback(snap.id, edges=_Src())
+    await snaps.rollback(snap.id, edges=store)
     assert store.edges[e1.id].status.value == "active"
     assert store.edges[e2.id].status.value == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_rollback_skips_invalidated() -> None:
+    store = InMemoryExperienceStore()
+    identity = _identity()
+    payload = ExperiencePayload(
+        id=new_experience_payload_id(),
+        query_run_id=new_query_run_id(),
+        query_text="q",
+        query_embedding=[1.0, 0.0, 0.0, 0.0],
+        embedding_identity=identity,
+        trace_summary="t",
+    )
+    await store.create_payload(payload)
+    e1 = ExperienceEdge(
+        id=new_experience_edge_id(),
+        payload_id=payload.id,
+        source_uri="viking://objects/" + str(uuid4()),
+        target_uri="viking://objects/" + str(uuid4()) + "/a",
+    )
+    await store.create_edges([e1])
+    snaps = InMemorySnapshotStore()
+    snap = await snaps.create(name="warm", edges=[e1])
+    e1.status = ExperienceEdgeStatus.INVALIDATED
+    await snaps.rollback(snap.id, edges=store)
+    assert store.edges[e1.id].status is ExperienceEdgeStatus.INVALIDATED

@@ -20,6 +20,7 @@ from vikingrag.infrastructure.database.repositories.experience import (
     SqlQueryRunRepository,
     SqlRetrievalEventRepository,
 )
+from vikingrag.infrastructure.database.repositories.node import SqlNodeRepository
 from vikingrag.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -69,12 +70,14 @@ class EdgeBuilderWorker:
             runs_repo = SqlQueryRunRepository(session)
             events_repo = SqlRetrievalEventRepository(session)
             edges_repo = SqlExperienceEdgeRepository(session)
+            nodes_repo = SqlNodeRepository(session)
             builder = ExperienceEdgeBuilder(
                 runs=runs_repo,
                 events=events_repo,
                 edges=edges_repo,
                 max_support=self._max_support,
                 support_selector=self._support_selector,
+                nodes=nodes_repo,
             )
             claimed = await runs_repo.claim_pending_edge_jobs(limit=self._batch_size)
             if not claimed:

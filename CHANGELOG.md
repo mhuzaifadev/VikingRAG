@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.5.1
+
+Correctness release for experience-edge handling when documents change. Does not claim this behavior was complete in v0.5.0.
+
+### Fixed
+
+- REPLACE invalidates incident experience edges on **every** resolve path (external_id and content hash), including direct `IngestionPipeline` use — not only `DocumentService` + external_id
+- Invalidation and hierarchy replace/soft-delete run in the **same DB transaction** (rollback restores edges + nodes + status together)
+- Source object keys are revision-specific (`documents/{id}/source/{content_hash}/{filename}`) so a failed REPLACE cannot leave the previous document pointing at overwritten bytes
+- PENDING edge-build jobs that touch a replaced/deleted document are skipped (`document_replaced_or_deleted`)
+- Edge builder stamps `source_revision` / `target_revision` from live node `content_hash` and skips pairs whose endpoints are missing
+- Snapshot rollback never reactivates `INVALIDATED` edges (only non-invalidated snapshot members)
+
+### Semantics (unchanged by design)
+
+- `SKIP_IDENTICAL` leaves experience intact
+- `CREATE_VERSION` does not transfer edges to the new document
+- No automatic structural migration or semantic revalidation of edges across moved sections
+
 ## v0.5.0
 
 Independent Postgres/pgvector production release: controllable experience learning, SDK lifecycle, replayable traces, and honest eval exports. Paper charts remain paper results — score claims require Milestone D exports only. Official AGPL runner is never vendored (`official_baseline.status=not_run` unless you pin a separate checkout).

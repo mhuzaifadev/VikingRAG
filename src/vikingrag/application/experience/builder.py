@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from vikingrag.application.experience.support_select import (
     DeterministicSupportSelector,
@@ -10,6 +11,7 @@ from vikingrag.application.experience.support_select import (
 )
 from vikingrag.application.experience.trace_sets import extract_trace_uri_sets, summarize_trace
 from vikingrag.domain.errors import DomainError
+from vikingrag.domain.models.document import NodeId
 from vikingrag.domain.models.experience import (
     EdgeBuildStatus,
     ExperienceEdge,
@@ -20,6 +22,7 @@ from vikingrag.domain.models.experience import (
     new_experience_edge_id,
     new_experience_payload_id,
 )
+from vikingrag.domain.models.node import DocumentNode
 from vikingrag.infrastructure.database.repositories.experience import (
     ExperienceEdgeRepository,
     QueryRunRepository,
@@ -33,6 +36,12 @@ logger = get_logger(__name__)
 class ExperienceLearnError(DomainError):
     def __init__(self, message: str) -> None:
         super().__init__(message, code="experience_learn_error")
+
+
+class NodeUriResolver(Protocol):
+    """Resolve a viking:// URI to a live document node (for revision stamping)."""
+
+    async def get_by_uri(self, uri: str) -> DocumentNode | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +63,8 @@ class ExperienceEdgeBuilder:
     - No self-edges.
     - Idempotent per query_run (existing payload → skip).
     - Suppress duplicate active (source, target) under compatible embedding identity.
+    - When a NodeUriResolver is provided, skip pairs whose endpoints are missing
+      and stamp source_revision / target_revision from live node content_hash.
     """
 
     def __init__(
@@ -64,11 +75,13 @@ class ExperienceEdgeBuilder:
         edges: ExperienceEdgeRepository,
         max_support: int = 16,
         support_selector: SupportSelector | None = None,
+        nodes: NodeUriResolver | None = None,
     ) -> None:
         self._runs = runs
         self._events = events
         self._edges = edges
         self._max_support = max_support
+        self._nodes = nodes
         self._support: SupportSelector = support_selector or DeterministicSupportSelector(
             max_support=max_support
         )
@@ -150,6 +163,7 @@ class ExperienceEdgeBuilder:
 
         created: list[ExperienceEdge] = []
         suppressed = 0
+        missing_endpoints = 0
         identity = run.embedding_identity
         for src in sorted(sets.u_src):
             for tgt in sorted(u_tgt):
@@ -159,6 +173,24 @@ class ExperienceEdgeBuilder:
                 if dup is not None:
                     suppressed += 1
                     continue
+
+                src_node: DocumentNode | None = None
+                tgt_node: DocumentNode | None = None
+                src_rev: str | None = None
+                tgt_rev: str | None = None
+                src_nid: NodeId | None = None
+                tgt_nid: NodeId | None = None
+                if self._nodes is not None:
+                    src_node = await self._nodes.get_by_uri(src)
+                    tgt_node = await self._nodes.get_by_uri(tgt)
+                    if src_node is None or tgt_node is None:
+                        missing_endpoints += 1
+                        continue
+                    src_rev = src_node.content_hash
+                    tgt_rev = tgt_node.content_hash
+                    src_nid = src_node.id
+                    tgt_nid = tgt_node.id
+
                 created.append(
                     ExperienceEdge(
                         id=new_experience_edge_id(),
@@ -166,6 +198,10 @@ class ExperienceEdgeBuilder:
                         source_uri=src,
                         target_uri=tgt,
                         status=ExperienceEdgeStatus.ACTIVE,
+                        source_node_id=src_nid,
+                        target_node_id=tgt_nid,
+                        source_revision=src_rev,
+                        target_revision=tgt_rev,
                         support_score=1.0,
                         metadata={"from_run": str(run.id)},
                     )
@@ -173,6 +209,20 @@ class ExperienceEdgeBuilder:
 
         if created:
             created = await self._edges.create_edges(created)
+
+        if not created and missing_endpoints > 0 and suppressed == 0:
+            reason = "endpoints_missing_after_document_change"
+            run.edge_build_status = EdgeBuildStatus.SKIPPED
+            run.edge_build_error = reason
+            await self._runs.update(run)
+            return ExperienceBuildResult(
+                run_id=run.id,
+                payload=payload,
+                edges_created=(),
+                edges_suppressed=0,
+                skipped=True,
+                skip_reason=reason,
+            )
 
         run.status = QueryRunStatus.SUCCEEDED
         run.edge_build_status = EdgeBuildStatus.COMPLETED
@@ -184,6 +234,7 @@ class ExperienceEdgeBuilder:
             run_id=str(run.id),
             edges_created=len(created),
             edges_suppressed=suppressed,
+            missing_endpoints=missing_endpoints,
             u_src=len(sets.u_src),
             u_tgt=len(u_tgt),
         )

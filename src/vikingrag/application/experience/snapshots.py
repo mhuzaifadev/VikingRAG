@@ -22,6 +22,8 @@ logger = get_logger(__name__)
 class SnapshotEdgeSource(Protocol):
     async def list_active_edges(self) -> list[ExperienceEdge]: ...
 
+    async def get_edge(self, edge_id: ExperienceEdgeId) -> ExperienceEdge | None: ...
+
     async def set_edge_status(
         self, edge_id: ExperienceEdgeId, status: ExperienceEdgeStatus
     ) -> None: ...
@@ -73,16 +75,35 @@ class InMemorySnapshotStore:
         *,
         edges: SnapshotEdgeSource,
     ) -> ExperienceSnapshot:
-        """Restore active set to snapshot membership without re-embedding."""
+        """Restore active set to snapshot membership without re-embedding.
+
+        Explicitly INVALIDATED edges (e.g. document replace/delete) are never
+        reactivated by rollback — only SUPERSEDED (or other non-invalidated)
+        snapshot members may return to ACTIVE.
+        """
         snap = self.snapshots[snapshot_id]
         keep = set(snap.edge_ids)
         active = await edges.list_active_edges()
         for edge in active:
             if edge.id not in keep:
                 await edges.set_edge_status(edge.id, ExperienceEdgeStatus.SUPERSEDED)
-        # Reactivate snapshot edges that were superseded
+        reactivated = 0
+        skipped_invalidated = 0
         for edge_id in snap.edge_ids:
-            await edges.set_edge_status(edge_id, ExperienceEdgeStatus.ACTIVE)
+            member = await edges.get_edge(edge_id)
+            if member is None:
+                continue
+            if member.status is ExperienceEdgeStatus.INVALIDATED:
+                skipped_invalidated += 1
+                continue
+            if member.status is not ExperienceEdgeStatus.ACTIVE:
+                await edges.set_edge_status(edge_id, ExperienceEdgeStatus.ACTIVE)
+                reactivated += 1
         snap.status = SnapshotStatus.ACTIVE
-        logger.info("experience_snapshot_rollback", snapshot_id=str(snapshot_id))
+        logger.info(
+            "experience_snapshot_rollback",
+            snapshot_id=str(snapshot_id),
+            reactivated=reactivated,
+            skipped_invalidated=skipped_invalidated,
+        )
         return snap

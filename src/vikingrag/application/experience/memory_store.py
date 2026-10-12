@@ -84,3 +84,16 @@ class InMemoryExperienceStore:
 
     async def count_active(self) -> int:
         return sum(1 for e in self.edges.values() if e.status is ExperienceEdgeStatus.ACTIVE)
+
+    async def list_active_edges(self) -> list[ExperienceEdge]:
+        return [e for e in self.edges.values() if e.status is ExperienceEdgeStatus.ACTIVE]
+
+    async def get_edge(self, edge_id: ExperienceEdgeId) -> ExperienceEdge | None:
+        return self.edges.get(edge_id)
+
+    async def set_edge_status(
+        self, edge_id: ExperienceEdgeId, status: ExperienceEdgeStatus
+    ) -> None:
+        edge = self.edges.get(edge_id)
+        if edge is not None:
+            edge.status = status

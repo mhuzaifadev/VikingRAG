@@ -14,6 +14,7 @@ Faithful algorithm behavior is separated from production extensions. Deviations 
 | Alg 1 | Agentic multi-round tool retrieval | `application/agent/loop.py` | `test_agent_loop.py` | implemented |
 | Alg 2 | Experience construction `U_src/U_cand/U_edge/U_tgt` | `application/experience/*`, migration `0004` | `test_experience_edges.py` | implemented |
 | Alg 2 SUPPORT | LLM evidence-selection (with deterministic fallback) | `support_select.py` (`llm` \| `deterministic`) | `test_support_selector.py` | implemented |
+| Prod | Document replace/delete retires incident edges (txn + revision object keys) | `invalidate.py`, `pipeline.py`, `documents.py` | `test_experience_invalidation_on_replace.py` | implemented (v0.5.1) |
 | Alg 3 | Search+ γ-gated edge expansion | `application/search_plus.py`, `experience/expand.py` | experience + acceptance | implemented |
 | §5 | VikingRAG-E+ one-round + candidate + strict sufficiency | `orchestration/query.py`, `candidate.py` | `test_eplus_strict_gate.py` | implemented |
 | Supplement | Constraint-aware sufficiency | `assessment.py` v2 (entity/time/scope slots) | assessment units | implemented |

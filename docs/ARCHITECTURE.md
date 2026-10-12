@@ -834,10 +834,12 @@ Add:
 
 Invalidate or down-rank edges when:
 
-- referenced documents change
+- referenced documents change (**v0.5.1:** `REPLACE` / soft-delete invalidate incident edges in the same DB transaction as hierarchy/status updates; PENDING learning jobs for that document are skipped; source blobs use revision-specific object keys)
 - target object is deleted
 - edge repeatedly fails sufficiency checks
 - query distribution changes
+
+Not implemented: automatic structural migration or semantic revalidation of edges when sections move. Snapshot rollback must not reactivate `INVALIDATED` edges.
 
 ---
 
